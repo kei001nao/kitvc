@@ -13,7 +13,7 @@ class MusicLibraryScreen(Widget):
     MusicLibraryScreen Label { text-style: bold; margin-bottom: 0; }
     MusicLibraryScreen #music-heading { margin-bottom: 1; }
     MusicLibraryScreen .playlist-help { color: $text-muted; margin-bottom: 1; }
-    MusicLibraryScreen DataTable { height: 1fr; background: $surface; border: solid $primary; color: $text; }
+    MusicLibraryScreen DataTable { height: 1fr; background: $surface; border: solid $primary; }
     """
 
     def compose(self) -> ComposeResult:
@@ -55,7 +55,7 @@ class MusicArtistScreen(Widget):
     MusicArtistScreen Label { text-style: bold; margin-bottom: 0; }
     MusicArtistScreen #music-artist-heading { margin-bottom: 1; }
     MusicArtistScreen .playlist-help { color: $text-muted; margin-bottom: 1; }
-    MusicArtistScreen DataTable#music-albums { height: 8; background: $surface; border: solid $primary; margin-bottom: 1; color: $text; }
+    MusicArtistScreen DataTable#music-albums { height: 8; background: $surface; border: solid $primary; margin-bottom: 1; }
     MusicArtistScreen TrackList { height: 1fr; border: solid $primary; background: $surface; }
     """
 
@@ -160,7 +160,7 @@ class MusicPlaylistScreen(Widget):
     DEFAULT_CSS = """
     MusicPlaylistScreen { height: 1fr; padding: 1 2; layout: vertical; }
     MusicPlaylistScreen Label { text-style: bold; margin-bottom: 0; }
-    #playlist-selector { height: 8; border: solid $primary; margin-bottom: 1; background: $surface; color: $text; }
+    #playlist-selector { height: 8; border: solid $primary; margin-bottom: 1; background: $surface; }
     #playlist-tracks-container { height: 1fr; border: solid $primary; background: $surface; }
     .playlist-help { color: $text-muted; margin-bottom: 1; }
     """
@@ -188,7 +188,7 @@ class MusicPlaylistScreen(Widget):
 
     def reload_playlists(self) -> None:
         from ..database import get_playlists
-        self._playlists_list = get_playlists()
+        self._playlists_list = get_playlists(is_video=False)
         table = self.query_one("#playlist-selector", DataTable)
         table.clear()
         self._current_playlist_idx = -1
@@ -264,7 +264,7 @@ class MusicPlaylistScreen(Widget):
                     def check_confirm(confirmed: bool) -> None:
                         if confirmed:
                             from ..database import delete_playlist
-                            delete_playlist(p_id)
+                            delete_playlist(p_id, is_video=False)
                             self.app.notify(f"Playlist '{p_name}' deleted")
                             self.reload_playlists()
                     self.app.push_screen(ConfirmModal(f"Delete playlist '{p_name}'?"), callback=check_confirm)
@@ -298,10 +298,10 @@ class MusicPlaylistScreen(Widget):
                                 def check_confirm(confirmed: bool) -> None:
                                     if confirmed:
                                         from ..database import remove_from_playlist
-                                        remove_from_playlist(self._current_playlist_id, track["path"])
+                                        remove_from_playlist(self._current_playlist_id, track["path"], is_video=False)
                                         self.app.notify("Removed from playlist")
                                         self._load_playlist_tracks(self._current_playlist_id, self._current_playlist_name)
-                                        self.app.export_playlist_to_m3u(self._current_playlist_id)
+                                        self.app.export_playlist_to_m3u(self._current_playlist_id, is_video=False)
                                 
                                 self.app.push_screen(ConfirmModal("Remove from playlist?"), callback=check_confirm)
                                 event.stop()
@@ -310,10 +310,10 @@ class MusicPlaylistScreen(Widget):
                                 to_idx = idx - 1 if event.key == "shift+up" else idx + 1
                                 if 0 <= to_idx < len(tl._tracks):
                                     from ..database import move_in_playlist
-                                    move_in_playlist(self._current_playlist_id, idx, to_idx)
+                                    move_in_playlist(self._current_playlist_id, idx, to_idx, is_video=False)
                                     self._load_playlist_tracks(self._current_playlist_id, self._current_playlist_name)
                                     table_tracks.move_cursor(row=to_idx)
-                                    self.app.export_playlist_to_m3u(self._current_playlist_id)
+                                    self.app.export_playlist_to_m3u(self._current_playlist_id, is_video=False)
                                 event.stop()
                     except Exception:
                         pass

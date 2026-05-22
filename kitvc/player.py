@@ -32,9 +32,22 @@ class Player:
 
         self.on_track_start: list[Callable] = []
         self.on_track_end: list[Callable] = []
-        self._queue: list[dict] = []
+        self._music_queue: list[dict] = []
+        self._video_queue: list[dict] = []
         self._current_idx: int = -1
+        self._is_video_mode: bool = False
         self._paused: bool = False
+
+    @property
+    def _queue(self):
+        return self._video_queue if self._is_video_mode else self._music_queue
+    
+    @_queue.setter
+    def _queue(self, value):
+        if self._is_video_mode:
+            self._video_queue = value
+        else:
+            self._music_queue = value
 
     async def start(self) -> None:
         if Path(SOCKET_PATH).exists():
@@ -149,6 +162,7 @@ class Player:
         if not self._writer:
             await self.start()
             
+        self._is_video_mode = is_video
         if is_video:
             await self._cmd(["set_property", "video", "auto"])
         else:

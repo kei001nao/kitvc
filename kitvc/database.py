@@ -47,69 +47,113 @@ def init_db():
                 thumbnail_path TEXT
             )
         """)
+        # Separate Playlist tables for Music and Video
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS playlists (
+            CREATE TABLE IF NOT EXISTS music_playlists (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE
             )
         """)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS playlist_tracks (
+            CREATE TABLE IF NOT EXISTS music_playlist_tracks (
                 playlist_id INTEGER,
                 track_path TEXT,
                 sort_order INTEGER,
-                FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
+                FOREIGN KEY(playlist_id) REFERENCES music_playlists(id) ON DELETE CASCADE
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS video_playlists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS video_playlist_files (
+                playlist_id INTEGER,
+                file_path TEXT,
+                sort_order INTEGER,
+                FOREIGN KEY(playlist_id) REFERENCES video_playlists(id) ON DELETE CASCADE
+            )
+        """)
+        
+        # Migration: Move data from old tables if they exist
+        try:
+            # Check if old table exists
+            old_p = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='playlists'").fetchone()
+            if old_p:
+                # Copy music playlists (assuming they were mixed before, but let's just copy everything to both for safety if user wants, 
+                # or better, just copy to music as it was primarily used for music)
+                conn.execute("INSERT OR IGNORE INTO music_playlists (id, name) SELECT id, name FROM playlists")
+                conn.execute("INSERT OR IGNORE INTO music_playlist_tracks (playlist_id, track_path, sort_order) SELECT playlist_id, track_path, sort_order FROM playlist_tracks")
+                # We can't easily distinguish video playlists from the old structure without checking paths, 
+                # but let's assume video was also there.
+                conn.execute("INSERT OR IGNORE INTO video_playlists (id, name) SELECT id, name FROM playlists")
+                # Only insert video files into video_playlist_files
+                conn.execute("""
+                    INSERT OR IGNORE INTO video_playlist_files (playlist_id, file_path, sort_order) 
+                    SELECT pt.playlist_id, pt.track_path, pt.sort_order 
+                    FROM playlist_tracks pt
+                    JOIN video_files vf ON pt.track_path = vf.path
+                """)
+                # Clean up music_playlist_tracks (remove videos)
+                conn.execute("""
+                    DELETE FROM music_playlist_tracks WHERE track_path IN (SELECT path FROM video_files)
+                """)
+                
+                # Drop old tables
+                conn.execute("DROP TABLE playlist_tracks")
+                conn.execute("DROP TABLE playlists")
+        except sqlite3.Error:
+            pass
+
         conn.commit()
 
-def get_playlists():
+def get_playlists(is_video=False):
+    table = "video_playlists" if is_video else "music_playlists"
     with get_connection() as conn:
-        return [dict(row) for row in conn.execute("SELECT * FROM playlists ORDER BY name").fetchall()]
+        return [dict(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY name").fetchall()]
 
-def create_playlist(name):
+def create_playlist(name, is_video=False):
+    table = "video_playlists" if is_video else "music_playlists"
     with get_connection() as conn:
-        conn.execute("INSERT OR IGNORE INTO playlists (name) VALUES (?)", (name,))
+        conn.execute(f"INSERT OR IGNORE INTO {table} (name) VALUES (?)", (name,))
 
-def delete_playlist(playlist_id):
+def delete_playlist(playlist_id, is_video=False):
+    p_table = "video_playlists" if is_video else "music_playlists"
+    i_table = "video_playlist_files" if is_video else "music_playlist_tracks"
     with get_connection() as conn:
-        conn.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
-        conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?", (playlist_id,))
+        conn.execute(f"DELETE FROM {p_table} WHERE id = ?", (playlist_id,))
+        conn.execute(f"DELETE FROM {i_table} WHERE playlist_id = ?", (playlist_id,))
 
-def add_to_playlist(playlist_id, track_path):
+def add_to_playlist(playlist_id, path, is_video=False):
+    table = "video_playlist_files" if is_video else "music_playlist_tracks"
+    col = "file_path" if is_video else "track_path"
     with get_connection() as conn:
-        order = conn.execute("SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = ?", (playlist_id,)).fetchone()[0]
-        conn.execute("INSERT INTO playlist_tracks (playlist_id, track_path, sort_order) VALUES (?, ?, ?)", 
-                     (playlist_id, track_path, order))
+        order = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE playlist_id = ?", (playlist_id,)).fetchone()[0]
+        conn.execute(f"INSERT INTO {table} (playlist_id, {col}, sort_order) VALUES (?, ?, ?)", 
+                     (playlist_id, path, order))
 
-def get_playlist_items(playlist_id):
+def get_playlist_items(playlist_id, is_video=False):
+    i_table = "video_playlist_files" if is_video else "music_playlist_tracks"
+    d_table = "video_files" if is_video else "music_tracks"
+    col = "file_path" if is_video else "track_path"
+    
     with get_connection() as conn:
-        paths = [dict(row) for row in conn.execute("""
-            SELECT track_path, sort_order FROM playlist_tracks 
-            WHERE playlist_id = ? 
-            ORDER BY sort_order
+        items = [dict(row) for row in conn.execute(f"""
+            SELECT d.* FROM {d_table} d
+            JOIN {i_table} i ON d.path = i.{col}
+            WHERE i.playlist_id = ? 
+            ORDER BY i.sort_order
         """, (playlist_id,)).fetchall()]
         
-        items = []
-        for p in paths:
-            # Try music first
-            m = conn.execute("SELECT * FROM music_tracks WHERE path = ?", (p["track_path"],)).fetchone()
-            if m:
-                item = dict(m)
-                item["is_video"] = False
-                items.append(item)
-            else:
-                # Try video
-                v = conn.execute("SELECT * FROM video_files WHERE path = ?", (p["track_path"],)).fetchone()
-                if v:
-                    item = dict(v)
-                    item["is_video"] = True
-                    items.append(item)
+        for item in items:
+            item["is_video"] = is_video
         return items
 
 def get_playlist_tracks(playlist_id):
     # Compatibility wrapper for existing music logic
-    return [i for i in get_playlist_items(playlist_id) if not i.get("is_video")]
+    return get_playlist_items(playlist_id, is_video=False)
 
 def save_playback_position(path, pos, is_video=False):
     table = "video_files" if is_video else "music_tracks"
@@ -182,26 +226,31 @@ def update_video_manual_fields(path, fields):
     with get_connection() as conn:
         conn.execute(f"UPDATE video_files SET {', '.join(sets)} WHERE path = ?", tuple(values))
 
-def remove_from_playlist(playlist_id, track_path):
+def remove_from_playlist(playlist_id, path, is_video=False):
+    table = "video_playlist_files" if is_video else "music_playlist_tracks"
+    col = "file_path" if is_video else "track_path"
     with get_connection() as conn:
-        conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_path = ?", (playlist_id, track_path))
+        conn.execute(f"DELETE FROM {table} WHERE playlist_id = ? AND {col} = ?", (playlist_id, path))
         # Re-sort remaining items
-        tracks = conn.execute("SELECT track_path FROM playlist_tracks WHERE playlist_id = ? ORDER BY sort_order", (playlist_id,)).fetchall()
+        tracks = conn.execute(f"SELECT {col} FROM {table} WHERE playlist_id = ? ORDER BY sort_order", (playlist_id,)).fetchall()
         for i, t in enumerate(tracks):
-            conn.execute("UPDATE playlist_tracks SET sort_order = ? WHERE playlist_id = ? AND track_path = ?", (i, playlist_id, t["track_path"]))
+            conn.execute(f"UPDATE {table} SET sort_order = ? WHERE playlist_id = ? AND {col} = ?", (i, playlist_id, t[col]))
 
-def move_in_playlist(playlist_id, from_idx, to_idx):
+def move_in_playlist(playlist_id, from_idx, to_idx, is_video=False):
+    table = "video_playlist_files" if is_video else "music_playlist_tracks"
+    col = "file_path" if is_video else "track_path"
     with get_connection() as conn:
-        tracks = [row["track_path"] for row in conn.execute("SELECT track_path FROM playlist_tracks WHERE playlist_id = ? ORDER BY sort_order", (playlist_id,)).fetchall()]
+        tracks = [row[col] for row in conn.execute(f"SELECT {col} FROM {table} WHERE playlist_id = ? ORDER BY sort_order", (playlist_id,)).fetchall()]
         if 0 <= from_idx < len(tracks) and 0 <= to_idx < len(tracks):
             path = tracks.pop(from_idx)
             tracks.insert(to_idx, path)
             for i, p in enumerate(tracks):
-                conn.execute("UPDATE playlist_tracks SET sort_order = ? WHERE playlist_id = ? AND track_path = ?", (i, playlist_id, p))
+                conn.execute(f"UPDATE {table} SET sort_order = ? WHERE playlist_id = ? AND {col} = ?", (i, playlist_id, p))
 
-def rename_playlist(playlist_id, new_name):
+def rename_playlist(playlist_id, new_name, is_video=False):
+    table = "video_playlists" if is_video else "music_playlists"
     with get_connection() as conn:
-        conn.execute("UPDATE playlists SET name = ? WHERE id = ?", (new_name, playlist_id))
+        conn.execute(f"UPDATE {table} SET name = ? WHERE id = ?", (new_name, playlist_id))
 
 def remove_missing_files(current_paths, table):
     # This is a bit slow for many files, but okay for starters

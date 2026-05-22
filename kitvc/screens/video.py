@@ -104,7 +104,7 @@ class VideoPlaylistScreen(Widget):
 
     def reload_playlists(self) -> None:
         from ..database import get_playlists
-        self._playlists_list = get_playlists()
+        self._playlists_list = get_playlists(is_video=True)
         table = self.query_one("#video-playlist-selector", DataTable)
         table.clear()
         self._current_playlist_idx = -1
@@ -150,7 +150,7 @@ class VideoPlaylistScreen(Widget):
         self._current_playlist_id = playlist_id
         self._current_playlist_name = name
         from ..database import get_playlist_items
-        items = [i for i in get_playlist_items(playlist_id) if i.get("is_video")]
+        items = get_playlist_items(playlist_id, is_video=True)
         self.query_one("#video-playlist-tracks", VideoList).load(items)
 
     def on_key(self, event) -> None:
@@ -167,7 +167,7 @@ class VideoPlaylistScreen(Widget):
 
         if table_selector.has_focus:
             if event.key == "n":
-                self.app.show_playlist_create_dialog(callback=self._after_playlist_created)
+                self.app.show_playlist_create_dialog(callback=self._after_playlist_created, is_video=True)
                 event.stop()
             elif event.key == "d" and table_selector.cursor_row is not None:
                 try:
@@ -180,7 +180,7 @@ class VideoPlaylistScreen(Widget):
                     def check_confirm(confirmed: bool) -> None:
                         if confirmed:
                             from ..database import delete_playlist
-                            delete_playlist(p_id)
+                            delete_playlist(p_id, is_video=True)
                             self.app.notify(f"Playlist '{p_name}' deleted")
                             self.reload_playlists()
                     self.app.push_screen(ConfirmModal(f"Delete playlist '{p_name}'?"), callback=check_confirm)
@@ -214,10 +214,10 @@ class VideoPlaylistScreen(Widget):
                                 def check_confirm(confirmed: bool) -> None:
                                     if confirmed:
                                         from ..database import remove_from_playlist
-                                        remove_from_playlist(self._current_playlist_id, video["path"])
+                                        remove_from_playlist(self._current_playlist_id, video["path"], is_video=True)
                                         self.app.notify("Removed from playlist")
                                         self._load_playlist_videos(self._current_playlist_id, self._current_playlist_name)
-                                        self.app.export_playlist_to_m3u(self._current_playlist_id)
+                                        self.app.export_playlist_to_m3u(self._current_playlist_id, is_video=True)
                                 
                                 self.app.push_screen(ConfirmModal("Remove from playlist?"), callback=check_confirm)
                                 event.stop()
@@ -226,10 +226,10 @@ class VideoPlaylistScreen(Widget):
                                 to_idx = idx - 1 if event.key == "shift+up" else idx + 1
                                 if 0 <= to_idx < len(vl._videos):
                                     from ..database import move_in_playlist
-                                    move_in_playlist(self._current_playlist_id, idx, to_idx)
+                                    move_in_playlist(self._current_playlist_id, idx, to_idx, is_video=True)
                                     self._load_playlist_videos(self._current_playlist_id, self._current_playlist_name)
                                     table_videos.move_cursor(row=to_idx)
-                                    self.app.export_playlist_to_m3u(self._current_playlist_id)
+                                    self.app.export_playlist_to_m3u(self._current_playlist_id, is_video=True)
                                 event.stop()
                     except Exception:
                         pass

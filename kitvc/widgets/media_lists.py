@@ -6,7 +6,7 @@ from textual.widgets import DataTable
 class TrackList(Widget):
     DEFAULT_CSS = """
     TrackList { height: 1fr; background: $surface; } 
-    TrackList DataTable { height: 1fr; background: transparent; color: $text; }
+    TrackList DataTable { height: 1fr; background: transparent; }
     TrackList DataTable .marked-row { background: $accent 20%; }
     """
 
@@ -167,7 +167,7 @@ class TrackList(Widget):
 class VideoList(Widget):
     DEFAULT_CSS = """
     VideoList { height: 1fr; background: $surface; } 
-    VideoList DataTable { height: 1fr; background: transparent; color: $text; }
+    VideoList DataTable { height: 1fr; background: transparent; }
     VideoList DataTable .marked-row { background: $accent 20%; }
     """
 

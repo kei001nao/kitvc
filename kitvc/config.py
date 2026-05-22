@@ -14,7 +14,8 @@ DEFAULT_CONFIG = {
         "directories": [str(Path.home() / "Videos")],
     },
     "playlist": {
-        "playlist_dir": "",
+        "music_playlist_dir": "",
+        "video_playlist_dir": "",
     },
     "player": {
         "mpv_args": [],
@@ -31,7 +32,6 @@ DEFAULT_THEME = {
         "accent": "magenta",
         "background": "",
         "surface": "",
-        "text": "",
     }
 }
 

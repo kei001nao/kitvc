@@ -111,16 +111,18 @@ class Sidebar(Widget):
 
     async def _handle_node_change(self, node) -> None:
         data = node.data
-        if data == "music_library":
+        if data == "music_root":
+            self.app.switch_screen("music_queue")
+        elif data == "video_root":
+            self.app.switch_screen("video_queue")
+        elif data == "music_library":
             self.app.switch_screen("music")
         elif data == "video_library":
             self.app.switch_screen("video")
         elif data == "music_queue":
-            self.app.switch_screen("queue")
+            self.app.switch_screen("music_queue")
         elif data == "video_queue":
-            # Currently video shares the same queue view but filtered? 
-            # Or just show all. For now same as music.
-            self.app.switch_screen("queue")
+            self.app.switch_screen("video_queue")
         elif data == "music_playlists":
             self.app.switch_screen("music_playlists")
         elif data == "video_playlists":
@@ -148,6 +150,10 @@ class PlaylistCreateModal(Screen):
     #create-container Input { margin-bottom: 1; border: none; background: $accent 10%; color: $text; }
     #create-container .playlist-help { width: 100%; text-align: center; background: $primary; color: $text; }
     """
+    def __init__(self, is_video=False, **kwargs):
+        super().__init__(**kwargs)
+        self.is_video = is_video
+
     def compose(self) -> ComposeResult:
         with Vertical(id="create-container"):
             yield Label("New Playlist Name:")
@@ -160,7 +166,7 @@ class PlaylistCreateModal(Screen):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         name = event.value.strip()
         if name:
-            create_playlist(name)
+            create_playlist(name, is_video=self.is_video)
             self.dismiss(True)
 
     def on_key(self, event) -> None:
@@ -185,9 +191,10 @@ class PlaylistQuickAddModal(Screen):
     #quick-add-container DataTable { height: auto; max-height: 10; margin: 1 0 0 0; background: transparent; border: none; }
     #quick-add-container .playlist-help { width: 100%; text-align: center; background: $primary; color: $text; margin: 0; }
     """
-    def __init__(self, track_paths: list[str], **kwargs):
+    def __init__(self, track_paths: list[str], is_video=False, **kwargs):
         super().__init__(**kwargs)
         self.track_paths = track_paths
+        self.is_video = is_video
         self._items = []
 
     def compose(self) -> ComposeResult:
@@ -202,7 +209,7 @@ class PlaylistQuickAddModal(Screen):
         
         self._items = []
         self._items.append({"name": "[New Playlist...]", "is_new": True})
-        for p in get_playlists():
+        for p in get_playlists(is_video=self.is_video):
             self._items.append({"name": p["name"], "id": p["id"], "is_new": False})
 
         for i, item in enumerate(self._items):
@@ -220,7 +227,7 @@ class PlaylistQuickAddModal(Screen):
             item = self._items[idx]
             
             if item.get("is_new"):
-                self.app.show_playlist_create_dialog(callback=self._after_new_playlist)
+                self.app.show_playlist_create_dialog(callback=self._after_new_playlist, is_video=self.is_video)
             else:
                 self._add_to(item["id"], item["name"])
         except (ValueError, IndexError):
@@ -228,8 +235,9 @@ class PlaylistQuickAddModal(Screen):
 
     def _after_new_playlist(self, result: bool) -> None:
         if result:
+            table = "video_playlists" if self.is_video else "music_playlists"
             with get_connection() as conn:
-                p = conn.execute("SELECT * FROM playlists ORDER BY id DESC LIMIT 1").fetchone()
+                p = conn.execute(f"SELECT * FROM {table} ORDER BY id DESC LIMIT 1").fetchone()
             if p:
                 self._add_to(p["id"], p["name"])
         else:
@@ -238,9 +246,9 @@ class PlaylistQuickAddModal(Screen):
     def _add_to(self, playlist_id: int, name: str) -> None:
         from .database import add_to_playlist
         for path in self.track_paths:
-            add_to_playlist(playlist_id, path)
+            add_to_playlist(playlist_id, path, is_video=self.is_video)
         self.app.notify(f"Added to '{name}'")
-        self.app.export_playlist_to_m3u(playlist_id)
+        self.app.export_playlist_to_m3u(playlist_id, is_video=self.is_video)
         self.dismiss(True)
 
     def on_key(self, event) -> None:
@@ -273,20 +281,15 @@ class KitvcApp(App):
         Binding("0", "volume_up", "Vol +10%", show=False),
     ]
 
-    def _generate_css(self, primary: str, accent: str, bg: str, surface: str, text: str) -> str:
+    def _generate_css(self, primary: str, accent: str, bg: str, surface: str) -> str:
         return f"""
         $primary: {primary};
         $accent: {accent};
         $background: {bg};
         $surface: {surface};
-        $text: {text};
 
         App {{
             background: $background;
-            color: $text;
-        }}
-        Label {{
-            color: $text;
         }}
         #main-layout {{
             layout: horizontal;
@@ -304,7 +307,6 @@ class KitvcApp(App):
             margin: 0 0 1 1;
         }}
         Tree {{
-            color: $text;
             background: transparent;
             scrollbar-color: $primary;
             scrollbar-color-hover: $primary;
@@ -317,40 +319,26 @@ class KitvcApp(App):
             scrollbar-color-hover: $primary;
             scrollbar-color-active: $accent;
             scrollbar-size: 1 1;
-            color: $text; /* Explicitly set text color (kitvc-o9b) */
         }}
-        DataTable > .datatable--header {{
-            color: $text;
-        }}
+
         Tree:focus > .tree--cursor {{
             background: $accent;
-            color: $text;
             text-style: bold;
-        }}
-        .tree--guides {{
-            color: $text 20%;
         }}
         .tree--guides-selected {{
             color: $accent;
         }}
-        .tree--label {{
-            color: $text;
-        }}
         /* Table selection styles - Focus sensitive (kitvc-o9b) */
         DataTable > .datatable--cursor {{
             background: $accent 20%;
-            color: $text;
         }}
         DataTable:focus > .datatable--cursor {{
             background: $accent;
-            color: $text;
             text-style: bold;
         }}
         #footer {{
             height: 1;
-            background: $primary;
-            color: $text;
-            text-style: bold;
+            background: $background;
         }}
         """
 
@@ -362,7 +350,6 @@ class KitvcApp(App):
         accent = colors.get("accent", "magenta")
         bg = colors.get("background", "")
         surface = colors.get("surface", "")
-        text = colors.get("text", "")
         
         # Mapping to keep Sidebar and Lists as they are (currently using 'background' color)
         # but allowing 'background' variable for the new "outside border" area.
@@ -374,10 +361,9 @@ class KitvcApp(App):
         
         if not bg: bg = "$background"
         if not surface: surface = "$surface"
-        if not text: text = "$text"
         
         # Define CSS at instance level including theme variables
-        self.CSS = self._generate_css(primary, accent, bg, surface, text)
+        self.CSS = self._generate_css(primary, accent, bg, surface)
         
         super().__init__()
         self.config = load_config()
@@ -484,13 +470,11 @@ class KitvcApp(App):
                 accent = colors.get("accent", "magenta")
                 bg = colors.get("background", "")
                 surface = colors.get("surface", "")
-                text = colors.get("text", "")
                 
                 if not bg: bg = "$background"
                 if not surface: surface = "$surface"
-                if not text: text = "$text"
                 
-                new_css = self._generate_css(primary, accent, bg, surface, text)
+                new_css = self._generate_css(primary, accent, bg, surface)
                 
                 css_key = None
                 for key in self.stylesheet.source.keys():
@@ -582,12 +566,15 @@ class KitvcApp(App):
             elif name == "video":
                 new_screen = VideoLibraryScreen()
             elif name in ("queue", "music_queue", "video_queue"):
+                self.app.player._is_video_mode = (name == "video_queue")
                 new_screen = QueueScreen()
             elif name == "artist":
                 new_screen = MusicArtistScreen(data)
             elif name == "music_playlists":
+                self.app.player._is_video_mode = False
                 new_screen = MusicPlaylistScreen()
             elif name == "video_playlists":
+                self.app.player._is_video_mode = True
                 from .screens.video import VideoPlaylistScreen
                 new_screen = VideoPlaylistScreen()
             elif name == "video_category":
@@ -670,39 +657,40 @@ class KitvcApp(App):
             await asyncio.sleep(0.5)
             await self.player.seek(pos)
 
-    def show_playlist_create_dialog(self, callback=None) -> None:
+    def show_playlist_create_dialog(self, callback=None, is_video=False) -> None:
         cb = callback or self._on_playlist_created
-        self.push_screen(PlaylistCreateModal(), callback=cb)
+        self.push_screen(PlaylistCreateModal(is_video=is_video), callback=cb)
 
     def _on_playlist_created(self, result: bool) -> None:
         if result:
             self.query_one(Sidebar).refresh_tree()
 
-    def show_playlist_add_dialog(self, track_paths: list[str]) -> None:
+    def show_playlist_add_dialog(self, track_paths: list[str], is_video: bool = False) -> None:
         if isinstance(track_paths, str): track_paths = [track_paths]
-        self.push_screen(PlaylistQuickAddModal(track_paths))
+        self.push_screen(PlaylistQuickAddModal(track_paths, is_video=is_video))
 
     @work(thread=True)
-    def export_playlist_to_m3u(self, playlist_id: int) -> None:
+    def export_playlist_to_m3u(self, playlist_id: int, is_video: bool = False) -> None:
         from .database import get_playlist_items
+        table = "video_playlists" if is_video else "music_playlists"
         with get_connection() as conn:
-            p = conn.execute("SELECT name FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+            p = conn.execute(f"SELECT name FROM {table} WHERE id = ?", (playlist_id,)).fetchone()
         if not p: return
         
         name = p["name"]
-        items = get_playlist_items(playlist_id)
+        items = get_playlist_items(playlist_id, is_video=is_video)
         
         # Decide export directory (config preference -> music/video fallback)
-        config_dir = self.config.get("playlist", {}).get("playlist_dir")
+        config_key = "video_playlist_dir" if is_video else "music_playlist_dir"
+        config_dir = self.config.get("playlist", {}).get(config_key)
+        
         if config_dir:
             if isinstance(config_dir, list) and config_dir:
                 m3u_dir = Path(config_dir[0])
             else:
                 m3u_dir = Path(str(config_dir))
         else:
-            if any(not i.get("is_video") for i in items):
-                base_dir = Path(self.config["music"]["directories"][0])
-            elif items:
+            if is_video:
                 base_dir = Path(self.config["video"]["directories"][0])
             else:
                 base_dir = Path(self.config["music"]["directories"][0])
@@ -731,18 +719,20 @@ class KitvcApp(App):
         self.push_screen(QuitModal())
 
     def action_switch_to_queue(self) -> None:
-        self.switch_screen("music_queue", focus_right=True)
+        name = "video_queue" if self.player._is_video_mode else "music_queue"
+        self.switch_screen(name, focus_right=True)
         try:
             sidebar = self.query_one(Sidebar)
-            sidebar.select_node_by_data("music_queue")
+            sidebar.select_node_by_data(name)
         except Exception:
             pass
 
     def action_switch_to_playlists(self) -> None:
-        self.switch_screen("music_playlists", focus_right=True)
+        name = "video_playlists" if self.player._is_video_mode else "music_playlists"
+        self.switch_screen(name, focus_right=True)
         try:
             sidebar = self.query_one(Sidebar)
-            sidebar.select_node_by_data("music_playlists")
+            sidebar.select_node_by_data(name)
         except Exception:
             pass
 
@@ -762,6 +752,7 @@ class KitvcApp(App):
     async def _do_import_m3u(self, m3u_path: str) -> None:
         path = Path(m3u_path)
         name = path.stem
+        is_video = self.player._is_video_mode
         
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -782,25 +773,35 @@ class KitvcApp(App):
                 self.notify("No tracks found in M3U", severity="error")
                 return
 
+            p_table = "video_playlists" if is_video else "music_playlists"
+            i_table = "video_playlist_files" if is_video else "music_playlist_tracks"
+            col = "file_path" if is_video else "track_path"
+
             with get_connection() as conn:
                 # Create playlist or get existing
-                conn.execute("INSERT OR IGNORE INTO playlists (name) VALUES (?)", (name,))
-                p = conn.execute("SELECT id FROM playlists WHERE name = ?", (name,)).fetchone()
+                conn.execute(f"INSERT OR IGNORE INTO {p_table} (name) VALUES (?)", (name,))
+                p = conn.execute(f"SELECT id FROM {p_table} WHERE name = ?", (name,)).fetchone()
                 p_id = p["id"]
                 
                 # Clear existing tracks for this playlist to rebuild it
-                conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?", (p_id,))
+                conn.execute(f"DELETE FROM {i_table} WHERE playlist_id = ?", (p_id,))
                 
                 for i, t_path in enumerate(tracks):
-                    conn.execute("INSERT INTO playlist_tracks (playlist_id, track_path, sort_order) VALUES (?, ?, ?)",
+                    conn.execute(f"INSERT INTO {i_table} (playlist_id, {col}, sort_order) VALUES (?, ?, ?)",
                                  (p_id, t_path, i))
             
-            self.notify(f"Imported '{name}' with {len(tracks)} tracks")
+            self.notify(f"Imported '{name}' with {len(tracks)} items")
             self.query_one(Sidebar).refresh_tree()
             # If we are on Playlists screen, refresh it
-            if self._current_screen_name == "music_playlists":
+            screen_name = "video_playlists" if is_video else "music_playlists"
+            if self._current_screen_name == screen_name:
                 try:
-                    self.query_one(MusicPlaylistScreen).reload_playlists()
+                    if is_video:
+                        from .screens.video import VideoPlaylistScreen
+                        self.query_one(VideoPlaylistScreen).reload_playlists()
+                    else:
+                        from .screens.music import MusicPlaylistScreen
+                        self.query_one(MusicPlaylistScreen).reload_playlists()
                 except Exception:
                     pass
         except Exception as e:
