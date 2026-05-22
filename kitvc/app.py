@@ -66,7 +66,7 @@ class Sidebar(Widget):
     def refresh_tree(self) -> None:
         with get_connection() as conn:
             artists = [row["artist"] for row in conn.execute("SELECT DISTINCT artist FROM music_tracks ORDER BY artist COLLATE NOCASE").fetchall()]
-            categories = [row["category"] for row in conn.execute("SELECT DISTINCT category FROM video_files WHERE category IS NOT NULL ORDER BY category").fetchall()]
+            categories = [row["category"] for row in conn.execute("SELECT DISTINCT category FROM video_files ORDER BY category").fetchall()]
         self.app.call_from_thread(self._populate_tree, artists, categories)
 
     def _populate_tree(self, artists: list[str], categories: list[str]) -> None:
@@ -89,7 +89,7 @@ class Sidebar(Widget):
         if video_lib:
             video_lib.remove_children()
             for cat in categories:
-                video_lib.add_leaf(cat or "Unknown", data={"type": "video_category", "name": cat})
+                video_lib.add_leaf(cat or "(unknown)", data={"type": "video_category", "name": cat})
 
     def select_node_by_data(self, data_id: any) -> None:
         tree = self.query_one("#nav-tree", Tree)
@@ -737,11 +737,17 @@ class KitvcApp(App):
             pass
 
     def action_import_playlist(self) -> None:
-        initial_dir = self.config.get("playlist", {}).get("playlist_dir")
+        is_video = self.player._is_video_mode
+        config_key = "video_playlist_dir" if is_video else "music_playlist_dir"
+        initial_dir = self.config.get("playlist", {}).get(config_key)
+        
         if isinstance(initial_dir, list) and initial_dir:
             initial_dir = initial_dir[0]
         elif not initial_dir:
-            initial_dir = self.config["music"]["directories"][0]
+            if is_video:
+                initial_dir = self.config["video"]["directories"][0]
+            else:
+                initial_dir = self.config["music"]["directories"][0]
         
         self.push_screen(FileSelectModal(initial_dir=initial_dir, pattern="*.m3u"), callback=self._on_m3u_selected)
 

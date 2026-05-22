@@ -42,6 +42,11 @@ class VideoLibraryScreen(Widget):
     def _on_edit_finished(self, result: bool) -> None:
         if result:
             self._load()
+            try:
+                from ..app import Sidebar
+                self.app.query_one(Sidebar).refresh_tree()
+            except Exception:
+                pass
 
 class VideoCategoryScreen(Widget):
     DEFAULT_CSS = """
@@ -54,7 +59,8 @@ class VideoCategoryScreen(Widget):
         self.category_name = category_name
 
     def compose(self) -> ComposeResult:
-        yield Label(f"Category: {self.category_name}", id="category-heading")
+        display_name = self.category_name if self.category_name else "(unknown)"
+        yield Label(f"Category: {display_name}", id="category-heading")
         yield VideoList(id="video-list")
 
     def on_mount(self) -> None:
@@ -63,14 +69,48 @@ class VideoCategoryScreen(Widget):
     @work(thread=True)
     def _load(self) -> None:
         with get_connection() as conn:
-            videos = [dict(row) for row in conn.execute(
-                "SELECT * FROM video_files WHERE category = ? ORDER BY series, season, episode, title", 
-                (self.category_name,)
-            ).fetchall()]
-        self.app.call_from_thread(self.query_one(VideoList).load, videos)
+            if self.category_name is None:
+                videos = [dict(row) for row in conn.execute(
+                    "SELECT * FROM video_files WHERE category IS NULL ORDER BY series, season, episode, title"
+                ).fetchall()]
+            else:
+                videos = [dict(row) for row in conn.execute(
+                    "SELECT * FROM video_files WHERE category = ? ORDER BY series, season, episode, title", 
+                    (self.category_name,)
+                ).fetchall()]
+        self.app.call_from_thread(self._populate, videos)
+
+    def _populate(self, videos: list[dict]) -> None:
+        if not videos:
+            # If the category is now empty, go back to library
+            try:
+                from ..app import Sidebar
+                sidebar = self.app.query_one(Sidebar)
+                sidebar.refresh_tree()
+                self.app.switch_screen("video")
+                sidebar.select_node_by_data("video_library")
+                self.app.notify(f"Category is now empty")
+            except Exception:
+                pass
+            return
+
+        self.query_one(VideoList).load(videos)
 
     def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
         self.app.play_video(event.video, event.videos, event.index)
+
+    def on_video_list_video_edit_requested(self, event: VideoList.VideoEditRequested) -> None:
+        self.app.push_screen(VideoEditModal(event.video), callback=self._on_edit_finished)
+
+    def _on_edit_finished(self, result: bool) -> None:
+        if result:
+            self._load()
+            try:
+                from ..app import Sidebar
+                sidebar = self.app.query_one(Sidebar)
+                sidebar.refresh_tree()
+            except Exception:
+                pass
 
 class VideoPlaylistScreen(Widget):
     DEFAULT_CSS = """
@@ -243,6 +283,22 @@ class VideoPlaylistScreen(Widget):
         # Disable Enter to play in playlist screen
         pass
 
+import unicodedata
+
+def get_display_width(text: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(c) in "WFA" else 1 for c in text)
+
+def truncate_to_width(text: str, max_width: int) -> str:
+    current_width = 0
+    res = []
+    for c in text:
+        w = 2 if unicodedata.east_asian_width(c) in "WFA" else 1
+        if current_width + w > max_width:
+            break
+        res.append(c)
+        current_width += w
+    return "".join(res)
+
 from textual_image.widget import Image
 
 class VideoEditModal(Screen):
@@ -252,67 +308,121 @@ class VideoEditModal(Screen):
         background: rgba(0, 0, 0, 0.5);
     }
     #edit-container {
-        width: 70;
-        height: auto;
+        width: 74;
+        height: 90%;
         border: panel $primary;
         background: $surface;
-        padding: 1;
+        padding: 0 1;
+    }
+    #edit-scroll {
+        height: 1fr;
+        overflow-y: auto;
+        padding: 0 4 0 1;
+    }
+    #edit-scroll > * {
+        margin-right: 2;
     }
     #edit-container Image {
         width: 64;
         height: 18;
-        margin: 1 2;
+        margin: 0 0 1 0;
         border: solid $primary;
     }
     #edit-container Label {
-        margin-top: 1;
+        margin-top: 0;
+        margin-bottom: 0;
+        text-style: bold;
+        height: 1;
     }
+    #edit-filename {
+        margin: 0 0 0 0;
+        height: 1;
+    }
+    #edit-container Input {
+        margin-bottom: 0;
+        height: 1;
+        border: none;
+        background: $accent 10%;
+        padding: 0 1;
+    }
+    #edit-title, #edit-series { width: 62; }
+    #edit-category { width: 32; }
+    #edit-type { width: 22; }
+    #edit-season, #edit-episode { width: 6; }
+
     #edit-container Horizontal {
-        margin-top: 2;
+        margin-top: 0;
         height: auto;
-        align: right middle;
     }
-    #edit-container Button {
-        margin-left: 2;
+    #edit-container Horizontal Vertical {
+        width: auto;
+        height: auto;
+        margin-right: 2;
+    }
+    .edit-help {
+        width: 100%;
+        text-align: center;
+        background: $primary;
+        color: $text;
+        margin-top: 1;
+        height: 1;
     }
     """
 
     def __init__(self, video: dict, **kwargs):
         super().__init__(**kwargs)
         self.video = video
+        self._limits = {
+            "edit-title": 60,
+            "edit-series": 60,
+            "edit-category": 30,
+            "edit-type": 20,
+            "edit-season": 4,
+            "edit-episode": 4
+        }
 
     def compose(self) -> ComposeResult:
         with Vertical(id="edit-container"):
             yield Label(f"Editing: {self.video['filename']}", id="edit-filename")
+            with Vertical(id="edit-scroll"):
+                if self.video.get("thumbnail_path"):
+                    from pathlib import Path
+                    if Path(self.video["thumbnail_path"]).exists():
+                        yield Image(self.video["thumbnail_path"])
+                
+                yield Label("Title")
+                yield Input(value=self.video.get("title") or "", id="edit-title")
+                yield Label("Series")
+                yield Input(value=self.video.get("series") or "", id="edit-series")
+                with Horizontal():
+                    with Vertical():
+                        yield Label("Season")
+                        yield Input(value=str(self.video.get("season") or ""), id="edit-season", restrict=r"[0-9]*")
+                    with Vertical(id="col-ep"):
+                        yield Label("Episode")
+                        yield Input(value=str(self.video.get("episode") or ""), id="edit-episode", restrict=r"[0-9]*")
+                yield Label("Category")
+                yield Input(value=self.video.get("category") or "", id="edit-category")
+                yield Label("Type")
+                yield Input(value=self.video.get("type") or "", id="edit-type")
             
-            if self.video.get("thumbnail_path"):
-                from pathlib import Path
-                if Path(self.video["thumbnail_path"]).exists():
-                    yield Image(self.video["thumbnail_path"])
-                else:
-                    yield Label("[Thumbnail not found]", id="edit-thumb-missing")
-            
-            yield Label("Title")
-            yield Input(value=self.video.get("title") or "", id="edit-title")
-            yield Label("Series")
-            yield Input(value=self.video.get("series") or "", id="edit-series")
-            with Horizontal():
-                with Vertical():
-                    yield Label("Season")
-                    yield Input(value=str(self.video.get("season") or ""), id="edit-season")
-                with Vertical():
-                    yield Label("Episode")
-                    yield Input(value=str(self.video.get("episode") or ""), id="edit-episode")
-            yield Label("Category")
-            yield Input(value=self.video.get("category") or "", id="edit-category")
-            yield Label("Type")
-            yield Input(value=self.video.get("type") or "", id="edit-type")
-            with Horizontal():
-                yield Button("Cancel", variant="error", id="cancel")
-                yield Button("Save", variant="primary", id="save")
+            yield Label("Enter: Save   ESC: Cancel", classes="edit-help")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "save":
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id in self._limits:
+            max_w = self._limits[event.input.id]
+            current_w = get_display_width(event.value)
+            if current_w > max_w:
+                event.input.value = truncate_to_width(event.value, max_w)
+
+    def on_mount(self) -> None:
+        self.query_one("#edit-title").focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._save()
+
+    def _save(self) -> None:
+        try:
             fields = {
                 "title": self.query_one("#edit-title", Input).value,
                 "series": self.query_one("#edit-series", Input).value,
@@ -322,6 +432,12 @@ class VideoEditModal(Screen):
                 "type": self.query_one("#edit-type", Input).value,
             }
             update_video_manual_fields(self.video["path"], fields)
+            self.app.notify("Video info updated")
             self.dismiss(True)
-        else:
+        except ValueError:
+            self.app.notify("Invalid number for Season/Episode", severity="error")
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
             self.dismiss(False)
+            event.stop()
