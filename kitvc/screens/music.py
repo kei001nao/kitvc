@@ -14,6 +14,7 @@ class MusicLibraryScreen(Widget):
     MusicLibraryScreen #music-heading { margin-bottom: 1; }
     MusicLibraryScreen .playlist-help { color: $text-muted; margin-bottom: 1; }
     MusicLibraryScreen DataTable { height: 1fr; background: $surface; border: solid $primary; }
+    MusicLibraryScreen DataTable:focus { border: tall $accent; }
     """
 
     def compose(self) -> ComposeResult:
@@ -56,7 +57,9 @@ class MusicArtistScreen(Widget):
     MusicArtistScreen #music-artist-heading { margin-bottom: 1; }
     MusicArtistScreen .playlist-help { color: $text-muted; margin-bottom: 1; }
     MusicArtistScreen DataTable#music-albums { height: 8; background: $surface; border: solid $primary; margin-bottom: 1; }
+    MusicArtistScreen DataTable#music-albums:focus { border: tall $accent; }
     MusicArtistScreen TrackList { height: 1fr; border: solid $primary; background: $surface; }
+    MusicArtistScreen TrackList:focus-within { border: tall $accent; }
     """
 
     def __init__(self, artist_name: str, **kwargs):
@@ -143,7 +146,7 @@ class MusicArtistScreen(Widget):
                 (self._artist_name, album_name)
             ).fetchall()]
         for t in tracks: t["is_video"] = False
-        self.app.player.add_to_queue(tracks)
+        self.app.music_player.add_to_queue(tracks)
         self.app.notify(f"Added album '{album_name}' to queue")
 
     @work(thread=True)
@@ -161,7 +164,9 @@ class MusicPlaylistScreen(Widget):
     MusicPlaylistScreen { height: 1fr; padding: 1 2; layout: vertical; }
     MusicPlaylistScreen Label { text-style: bold; margin-bottom: 0; }
     #playlist-selector { height: 8; border: solid $primary; margin-bottom: 1; background: $surface; }
+    #playlist-selector:focus { border: tall $accent; }
     #playlist-tracks-container { height: 1fr; border: solid $primary; background: $surface; }
+    #playlist-tracks-container:focus-within { border: tall $accent; }
     .playlist-help { color: $text-muted; margin-bottom: 1; }
     """
 
@@ -220,6 +225,9 @@ class MusicPlaylistScreen(Widget):
             if event.control.id != "playlist-selector":
                 return
 
+            if event.row_key is None:
+                return
+
             idx = int(str(event.row_key.value))
             if getattr(self, "_current_playlist_idx", -1) == idx:
                 return
@@ -273,13 +281,13 @@ class MusicPlaylistScreen(Widget):
                 event.stop()
             elif event.key == "q" and table_selector.cursor_row is not None:
                 if tl._tracks:
-                    self.app.player.add_to_queue(tl._tracks)
+                    self.app.music_player.add_to_queue(tl._tracks)
                     self.app.notify(f"Added all tracks from playlist to queue")
                 event.stop()
         
         elif tl_focused:
             if event.key == "q":
-                self.app.player.add_to_queue(tl._tracks)
+                self.app.music_player.add_to_queue(tl._tracks)
                 self.app.notify(f"Added {len(tl._tracks)} tracks to queue")
                 event.stop()
                 return
@@ -338,6 +346,7 @@ class QueueScreen(Static):
     #queue-heading { text-style: bold; margin-bottom: 1; }
     #queue-help { color: $text-muted; margin-bottom: 1; }
     #queue-tracks { height: 1fr; border: solid $primary; background: $surface; }
+    #queue-tracks:focus-within { border: tall $accent; }
     """
 
     def compose(self) -> ComposeResult:
@@ -353,23 +362,23 @@ class QueueScreen(Static):
     def _update_playback_status(self) -> None:
         try:
             tl = self.query_one("#queue-tracks", TrackList)
-            idx = self.app.player._current_idx
-            is_paused = self.app.player._paused
+            idx = self.app.music_player._current_idx
+            is_paused = self.app.music_player._paused
             tl.set_current_index(idx, is_paused)
         except Exception:
             pass
 
     def reload_queue(self) -> None:
-        tracks = self.app.player._queue
+        tracks = self.app.music_player._queue
         try:
             tl = self.query_one("#queue-tracks", TrackList)
             tl.load(tracks)
-            tl.set_current_index(self.app.player._current_idx, self.app.player._paused)
+            tl.set_current_index(self.app.music_player._current_idx, self.app.music_player._paused)
         except Exception:
             pass
 
     async def _do_play_from_queue(self, idx: int) -> None:
-        await self.app.player.play_from_queue(idx)
+        await self.app.music_player.play_from_queue(idx)
         self._update_playback_status()
 
     def on_track_list_track_selected(self, event: TrackList.TrackSelected) -> None:
@@ -394,14 +403,14 @@ class QueueScreen(Static):
             return
         
         if event.key == "p":
-            if self.app.player.get_current_track():
+            if self.app.music_player.get_current_track():
                 # Already playing, let global toggle_pause handle it
                 return
             if table.row_count > 0 and table.cursor_row is not None:
                 try:
                     row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
                     idx = int(str(row_key.value))
-                    asyncio.create_task(self.app.player.play_from_queue(idx))
+                    asyncio.create_task(self.app.music_player.play_from_queue(idx))
                     event.stop()
                     return
                 except Exception:
@@ -422,7 +431,7 @@ class QueueScreen(Static):
                 def check_confirm(confirmed: bool) -> None:
                     if confirmed:
                         for idx in sorted(list(marked), reverse=True):
-                            self.app.player.remove_from_queue(idx)
+                            self.app.music_player.remove_from_queue(idx)
                         self.reload_queue()
                         self.app.notify(f"Removed {len(marked)} items from queue")
                 
@@ -434,7 +443,7 @@ class QueueScreen(Static):
                 from ..widgets.modals import ConfirmModal
                 def check_confirm(confirmed: bool) -> None:
                     if confirmed:
-                        self.app.player.clear_queue()
+                        self.app.music_player.clear_queue()
                         self.reload_queue()
                         self.app.notify("Queue cleared")
                 
@@ -445,8 +454,9 @@ class QueueScreen(Static):
             if table.cursor_row is not None:
                 idx = int(str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value))
                 to_idx = idx - 1 if event.key == "shift+up" else idx + 1
-                if 0 <= to_idx < len(self.app.player._queue):
-                    self.app.player.move_in_queue(idx, to_idx)
+                if 0 <= to_idx < len(self.app.music_player._queue):
+                    self.app.music_player.move_in_queue(idx, to_idx)
                     self.reload_queue()
-                    table.move_cursor(row=to_idx)
+                    # Ensure cursor follows the moved item
+                    self.call_later(lambda: table.move_cursor(row=to_idx))
             event.stop()

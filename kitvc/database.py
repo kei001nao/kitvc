@@ -43,6 +43,7 @@ def init_db():
                 season INTEGER,
                 episode INTEGER,
                 title TEXT,
+                duration INTEGER DEFAULT 0,
                 last_pos REAL DEFAULT 0,
                 thumbnail_path TEXT
             )
@@ -183,30 +184,30 @@ def update_music_track(track_data):
 from .utils import parse_video_filename
 
 def update_video_file(video_data):
-    # Only update path, mtime, filename, size if it's a new file or changed
+    # Only update path, mtime, filename, size, duration if it's a new file or changed
     # Keep other manual fields if they exist
     with get_connection() as conn:
         existing = conn.execute("SELECT * FROM video_files WHERE path = ?", (video_data["path"],)).fetchone()
         if existing:
             conn.execute("""
                 UPDATE video_files SET 
-                    mtime = ?, filename = ?, size = ?, thumbnail_path = ?
+                    mtime = ?, filename = ?, size = ?, duration = ?, thumbnail_path = ?
                 WHERE path = ?
             """, (video_data["mtime"], video_data["filename"], video_data["size"], 
-                  video_data.get("thumbnail_path"), video_data["path"]))
+                  video_data.get("duration", 0), video_data.get("thumbnail_path"), video_data["path"]))
         else:
             # New file: Auto-classify
             meta = parse_video_filename(video_data["filename"])
             conn.execute("""
                 INSERT INTO video_files (
-                    path, mtime, filename, size, 
+                    path, mtime, filename, size, duration,
                     series, season, episode, thumbnail_path
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 video_data["path"], video_data["mtime"], video_data["filename"], 
-                video_data["size"], meta.get("series"), meta.get("season"), 
-                meta.get("episode"), video_data.get("thumbnail_path")
+                video_data["size"], video_data.get("duration", 0), meta.get("series"), 
+                meta.get("season"), meta.get("episode"), video_data.get("thumbnail_path")
             ))
 
 def update_video_manual_fields(path, fields):
@@ -253,6 +254,20 @@ def rename_playlist(playlist_id, new_name, is_video=False):
         conn.execute(f"UPDATE {table} SET name = ? WHERE id = ?", (new_name, playlist_id))
 
 def remove_missing_files(current_paths, table):
-    # This is a bit slow for many files, but okay for starters
+    if not current_paths:
+        with get_connection() as conn:
+            conn.execute(f"DELETE FROM {table}")
+        return
+
     with get_connection() as conn:
-        conn.execute(f"DELETE FROM {table} WHERE path NOT IN ({','.join(['?']*len(current_paths))})", tuple(current_paths))
+        # Create a temp table to hold current paths
+        conn.execute("CREATE TEMP TABLE current_scan_paths (path TEXT)")
+        # Insert in chunks to avoid parameter limit
+        chunk_size = 500
+        for i in range(0, len(current_paths), chunk_size):
+            chunk = current_paths[i:i + chunk_size]
+            conn.executemany("INSERT INTO current_scan_paths VALUES (?)", [(p,) for p in chunk])
+        
+        # Delete records that are NOT in the temp table
+        conn.execute(f"DELETE FROM {table} WHERE path NOT IN (SELECT path FROM current_scan_paths)")
+        conn.execute("DROP TABLE current_scan_paths")

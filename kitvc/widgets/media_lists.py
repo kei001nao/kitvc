@@ -70,13 +70,14 @@ class TrackList(Widget):
     def load(self, tracks: list) -> None:
         # Check if data is actually different to avoid unnecessary clear() and cursor reset
         new_paths = [t.get("path") for t in tracks]
-        old_paths = [t.get("path") for t in self._tracks]
+        # We need a COPY of the list for comparison if it's the same object being modified
+        old_paths = getattr(self, "_last_paths", [])
         
         if new_paths == old_paths and self._tracks:
-            # Data is the same, just update marks if needed (optional)
             return
 
         self._tracks = tracks
+        self._last_paths = list(new_paths) # Store a copy of path list
         self._marked_indices.clear()
         self._current_index = -1
         self._last_is_paused = False
@@ -187,6 +188,8 @@ class VideoList(Widget):
         super().__init__(**kwargs)
         self._videos = []
         self._marked_indices = set()
+        self._current_index = -1
+        self._last_is_paused = False
 
     def compose(self) -> ComposeResult:
         yield DataTable(cursor_type="row", zebra_stripes=True)
@@ -202,22 +205,62 @@ class VideoList(Widget):
         table.add_column("Type", key="type")
         table.add_column("Filename", key="filename")
         table.add_column("Size", key="size")
+        if self._videos:
+            self.load(self._videos)
+
+    def set_current_index(self, index: int, is_paused: bool = False) -> None:
+        if self._current_index == index and getattr(self, "_last_is_paused", None) == is_paused:
+            return
+
+        table = self.query_one(DataTable)
+        if self._current_index != -1 and self._current_index < len(self._videos):
+            try:
+                row_key = str(self._current_index)
+                mark = "●" if self._current_index in self._marked_indices else " "
+                table.update_cell(row_key, "mark", mark)
+            except Exception:
+                pass
+        
+        self._current_index = index
+        self._last_is_paused = is_paused
+        
+        if self._current_index != -1 and self._current_index < len(self._videos):
+            try:
+                row_key = str(self._current_index)
+                mark = "■" if is_paused else "▶"
+                table.update_cell(row_key, "mark", mark)
+            except Exception:
+                pass
 
     def load(self, videos: list) -> None:
         # Check if data is actually different
         new_paths = [v.get("path") for v in videos]
-        old_paths = [v.get("path") for v in self._videos]
+        old_paths = getattr(self, "_last_paths", [])
         if new_paths == old_paths and self._videos:
             return
 
         self._videos = videos
+        self._last_paths = list(new_paths)
         self._marked_indices.clear()
-        table = self.query_one(DataTable)
+        self._current_index = -1
+        self._last_is_paused = False
+        
+        tables = self.query(DataTable)
+        if not tables:
+            return
+            
+        table = tables.first()
         table.clear()
         for i, v in enumerate(videos):
             size_mb = v.get("size", 0) / (1024 * 1024)
+            mark = " "
+            if i == self._current_index:
+                mark = "▶"
+            elif i in self._marked_indices:
+                mark = "●"
+                
             table.add_row(
-                " ",
+                mark,
                 v.get("title") or "",
                 v.get("series") or "",
                 str(v.get("season") or ""),
@@ -273,6 +316,6 @@ class VideoList(Widget):
         elif event.key == "q":
             videos = self.get_marked_videos()
             if videos:
-                self.app.player.add_to_queue(videos)
+                self.app.video_player.add_to_queue(videos)
                 self.app.notify(f"Added {len(videos)} videos to queue")
             event.stop()

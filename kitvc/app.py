@@ -11,12 +11,13 @@ from textual import work
 from .config import load_config, load_theme, THEME_PATH
 from .database import init_db, save_playback_position, get_playback_position, get_connection, get_playlists, create_playlist
 from .library import MusicLibrary, VideoLibrary
-from .player import Player
+from .player import MpvInfo, MusicPlayer, VideoPlayer
 from .widgets.header import Header
 from .widgets.modals import QuitModal, ConfirmModal, FileSelectModal
 from .widgets.playback import PlaybackControl
 from .screens.music import MusicLibraryScreen, MusicArtistScreen, MusicPlaylistScreen, QueueScreen
-from .screens.video import VideoLibraryScreen
+from .screens.video import VideoLibraryScreen, VideoCategoryScreen, VideoPlaylistScreen
+from .screens.video_queue import VideoQueueScreen
 
 LOGO = """█▄▀ █ ▀█▀ █ █ █▀
 █ █ █  █  ╚▄▀ █▄""".strip("\n")
@@ -261,7 +262,6 @@ class PlaylistQuickAddModal(Screen):
 class ContentArea(Widget):
     DEFAULT_CSS = "ContentArea { width: 1fr; height: 100%; }"
     def compose(self) -> ComposeResult:
-        # Changed default to QueueScreen for better initial state
         yield QueueScreen()
 
 class KitvcApp(App):
@@ -272,6 +272,7 @@ class KitvcApp(App):
         Binding("backspace", "go_back", "Back"),
         Binding("1", "switch_to_queue", "Queue"),
         Binding("2", "switch_to_playlists", "PlayLists"),
+        Binding("ctrl+s", "scan", "Scan Lib"),
         Binding("ctrl+o", "import_playlist", "Import M3U"),
         Binding("l", "seek(5)", "Seek +5s", show=False),
         Binding("h", "seek(-5)", "Seek -5s", show=False),
@@ -288,86 +289,49 @@ class KitvcApp(App):
         $background: {bg};
         $surface: {surface};
 
-        App {{
-            background: $background;
-        }}
-        #main-layout {{
-            layout: horizontal;
-            height: 1fr;
-        }}
-        Sidebar {{
-            width: 44;
-            border-right: solid $primary;
-            background: $background;
-        }}
-        Sidebar #app-title {{
-            height: auto;
-            color: $primary;
+        App {{ background: $background; }}
+        #main-layout {{ layout: horizontal; height: 1fr; }}
+        Sidebar {{ width: 44; border-right: solid $primary; background: $background; }}
+        Sidebar #app-title {{ height: auto; color: $primary; text-style: bold; margin: 0 0 1 1; }}
+        Tree {{ background: transparent; scrollbar-color: $primary; scrollbar-size: 1 1; }}
+        DataTable {{ scrollbar-color: $primary; scrollbar-size: 1 1; }}
+        
+        /* DataTable Header Stabilization */
+        DataTable > .datatable--header {{
+            background: $primary 20%;
+            color: $text;
             text-style: bold;
-            margin: 0 0 1 1;
         }}
-        Tree {{
-            background: transparent;
-            scrollbar-color: $primary;
-            scrollbar-color-hover: $primary;
-            scrollbar-color-active: $accent;
-            scrollbar-size: 1 1;
-        }}
-        /* Global ScrollBar styling for lists and tables (kitvc-fa9) */
-        DataTable {{
-            scrollbar-color: $primary;
-            scrollbar-color-hover: $primary;
-            scrollbar-color-active: $accent;
-            scrollbar-size: 1 1;
+        DataTable:focus > .datatable--header {{
+            background: $primary 40%;
         }}
 
-        Tree:focus > .tree--cursor {{
-            background: $accent;
-            text-style: bold;
-        }}
-        .tree--guides-selected {{
-            color: $accent;
-        }}
-        /* Table selection styles - Focus sensitive (kitvc-o9b) */
-        DataTable > .datatable--cursor {{
-            background: $accent 20%;
-        }}
-        DataTable:focus > .datatable--cursor {{
-            background: $accent;
-            text-style: bold;
-        }}
-        #footer {{
-            height: 1;
-            background: $background;
-        }}
+        Tree:focus > .tree--cursor {{ background: $accent; text-style: bold; }}
+        .tree--guides-selected {{ color: $accent; }}
+        
+        /* Cursor and Selection Styling */
+        DataTable > .datatable--cursor {{ background: $accent 20%; }}
+        DataTable:focus > .datatable--cursor {{ background: $accent; text-style: bold; }}
+        
+        #footer {{ height: 1; background: $background; }}
         """
 
     def __init__(self):
-        # Load theme before super().__init__ to prepare CSS
         theme = load_theme()
         colors = theme.get("colors", {})
         primary = colors.get("primary", "deepskyblue")
         accent = colors.get("accent", "magenta")
         bg = colors.get("background", "")
         surface = colors.get("surface", "")
-        
-        # Mapping to keep Sidebar and Lists as they are (currently using 'background' color)
-        # but allowing 'background' variable for the new "outside border" area.
-        # User said: Outside=background, Inside=remain as is (currently Greenish).
-        # Sidebar also Greenish.
-        # So Sidebar and Inside should use a variable that remains Greenish.
-        # Let's map $background to the theme's background, and $surface to theme's surface.
-        # Then Sidebar must use $background to stay Greenish.
-        
         if not bg: bg = "$background"
         if not surface: surface = "$surface"
-        
-        # Define CSS at instance level including theme variables
         self.CSS = self._generate_css(primary, accent, bg, surface)
         
         super().__init__()
         self.config = load_config()
-        self.player = Player(self.config)
+        self.mpv_info = MpvInfo()
+        self.music_player = MusicPlayer(self.config)
+        self.video_player = VideoPlayer(self.config)
         self.music_lib = MusicLibrary(self.config["music"]["directories"])
         self.video_lib = VideoLibrary(self.config["video"]["directories"])
         self.screen_history = []
@@ -379,7 +343,6 @@ class KitvcApp(App):
             self._theme_mtime = THEME_PATH.stat().st_mtime
 
     def _apply_theme(self) -> None:
-        # Theme is now applied via self.CSS in __init__
         pass
 
     def compose(self) -> ComposeResult:
@@ -387,45 +350,44 @@ class KitvcApp(App):
         with Horizontal(id="main-layout"):
             yield Sidebar()
             yield ContentArea(id="content")
-        yield Label("  ctrl+q: Quit | p: Play/Pause | h/l: Seek 5s, H/L: 30s | 1: Queue | 2: PlayLists | ctrl+o: Import M3U", id="footer")
+        yield Label("  ctrl+q: Quit | p: Play/Pause | ctrl+s: Scan | h/l: Seek | 1: Queue | 2: PlayLists | ctrl+o: Import M3U", id="footer")
 
     async def on_mount(self) -> None:
         self._apply_theme()
         init_db()
-        await self.player.start()
-        # self.player.on_track_start.append(self._update_footer) # Removed in favor of _poll_player
+        await self.mpv_info.start()
+        await self.music_player.start()
         self.set_interval(0.5, self._poll_player)
-        self.scan_libraries()
-
-        # theme.toml 監視タイマーの開始
+        self.scan_libraries(asyncio.get_running_loop())
         watch_interval = self.config.get("theme", {}).get("watch_interval", 2)
         if watch_interval > 0:
             self.set_interval(watch_interval, self._watch_theme)
 
     async def _poll_player(self) -> None:
-        if not self.player._writer:
+        header = self.query_one("#header", Header)
+        active_player = None
+        if self.video_player.mpv and self.video_player.get_current_track():
+            active_player = self.video_player
+        elif self.music_player.get_current_track():
+            active_player = self.music_player
+            
+        if not active_player:
+            header.clear()
             return
             
-        pos = await self.player.get_position()
-        dur = await self.player.get_duration()
-        paused = await self.player.get_property("pause")
-        self.player._paused = (paused == True)
+        pos = await active_player.get_position()
+        dur = await active_player.get_duration()
+        paused = await active_player.get_property("pause")
+        active_player._paused = (paused == True)
         
-        header = self.query_one("#header", Header)
-        track = self.player.get_current_track()
-        
+        track = active_player.get_current_track()
         if pos is not None and dur is not None and track:
             self._current_media = track
             title = track.get("title") or track.get("filename")
             artist = track.get("artist") or track.get("series") or ""
-            
-            # Enrich information
-            volume = self.player.volume
-            queue_pos = f"{self.player._current_idx + 1}/{len(self.player._queue)}"
-            
+            volume = active_player.volume
+            queue_pos = f"{active_player._current_idx + 1}/{len(active_player._queue)}"
             header.update_info(title, artist, pos, dur, volume, queue_pos)
-            
-            # Save position every 5 seconds
             if getattr(self, "_last_save_time", 0) < asyncio.get_event_loop().time() - 5:
                 self._last_save_time = asyncio.get_event_loop().time()
                 save_playback_position(track["path"], pos, is_video=track.get("is_video", False))
@@ -433,33 +395,39 @@ class KitvcApp(App):
             header.clear()
 
     async def action_seek(self, seconds: int) -> None:
-        pos = await self.player.get_position()
-        if pos is not None:
-            await self.player.seek(pos + seconds)
+        if self.video_player.mpv and self.video_player.get_current_track():
+            pos = await self.video_player.get_position()
+            if pos is not None: await self.video_player.seek(pos + seconds)
+        elif self.music_player.get_current_track():
+            pos = await self.music_player.get_position()
+            if pos is not None: await self.music_player.seek(pos + seconds)
 
     async def action_volume_up(self) -> None:
-        new_vol = min(100, self.player.volume + 10)
-        await self.player.set_volume(new_vol)
-        if "player" not in self.config:
-            self.config["player"] = {}
+        new_vol = min(100, (self.video_player.volume if self.video_player.mpv else self.music_player.volume) + 10)
+        await self.music_player.set_volume(new_vol)
+        await self.video_player.set_volume(new_vol)
+        if "player" not in self.config: self.config["player"] = {}
         self.config["player"]["volume"] = new_vol
         from .config import save_config
         save_config(self.config)
         await self._poll_player()
 
     async def action_volume_down(self) -> None:
-        new_vol = max(0, self.player.volume - 10)
-        await self.player.set_volume(new_vol)
-        if "player" not in self.config:
-            self.config["player"] = {}
+        new_vol = max(0, (self.video_player.volume if self.video_player.mpv else self.music_player.volume) - 10)
+        await self.music_player.set_volume(new_vol)
+        await self.video_player.set_volume(new_vol)
+        if "player" not in self.config: self.config["player"] = {}
         self.config["player"]["volume"] = new_vol
         from .config import save_config
         save_config(self.config)
         await self._poll_player()
 
+    async def action_scan(self) -> None:
+        self.notify("Scanning libraries...")
+        self.scan_libraries(asyncio.get_running_loop())
+
     async def _watch_theme(self) -> None:
-        if not THEME_PATH.exists():
-            return
+        if not THEME_PATH.exists(): return
         try:
             mtime = THEME_PATH.stat().st_mtime
             if mtime != self._theme_mtime:
@@ -470,65 +438,59 @@ class KitvcApp(App):
                 accent = colors.get("accent", "magenta")
                 bg = colors.get("background", "")
                 surface = colors.get("surface", "")
-                
                 if not bg: bg = "$background"
                 if not surface: surface = "$surface"
-                
                 new_css = self._generate_css(primary, accent, bg, surface)
-                
                 css_key = None
                 for key in self.stylesheet.source.keys():
                     if isinstance(key, tuple) and len(key) == 2 and key[1].endswith(".CSS"):
                         css_key = key
                         break
-                
                 if css_key:
                     original = self.stylesheet.source[css_key]
                     self.stylesheet.source[css_key] = (new_css, original[1], original[2], original[3])
-                    
                     self.stylesheet.reparse()
                     self.stylesheet.update(self)
-                    for screen in self.screen_stack:
-                        self.stylesheet.update(screen)
-                    
-                    try:
-                        self.screen._refresh_layout(self.size)
-                    except Exception:
-                        pass
+                    for screen in self.screen_stack: self.stylesheet.update(screen)
+                    try: self.screen._refresh_layout(self.size)
+                    except Exception: pass
                     self.refresh()
                     self.notify("Theme updated live")
-        except Exception:
-            pass
+        except Exception: pass
 
     @work(thread=True)
-    def scan_libraries(self) -> None:
-        def on_music_progress(f):
-            self.call_from_thread(self.notify, f"Scanning music: {f}", timeout=1)
-        def on_video_progress(f):
-            self.call_from_thread(self.notify, f"Scanning video: {f}", timeout=1)
-        
-        self.music_lib.scan(progress_cb=on_music_progress)
-        self.video_lib.scan(progress_cb=on_video_progress)
-        self.call_from_thread(self.notify, "Library scan complete!")
+    def scan_libraries(self, loop: asyncio.AbstractEventLoop) -> None:
+        try:
+            def on_music_progress(f): self.call_from_thread(self.notify, f"Scanning music: {f}", timeout=1)
+            def on_video_progress(f): self.call_from_thread(self.notify, f"Scanning video: {f}", timeout=1)
+            def get_video_meta(path):
+                try:
+                    fut = asyncio.run_coroutine_threadsafe(self.mpv_info.get_metadata(path), loop)
+                    return fut.result(timeout=10)
+                except Exception: return {}
+            self.music_lib.scan(progress_cb=on_music_progress)
+            self.video_lib.scan(progress_cb=on_video_progress, meta_cb=get_video_meta)
+            self.call_from_thread(self.notify, "Library scan complete!")
+            self.call_from_thread(self._refresh_sidebar)
+        except Exception as e:
+            self.call_from_thread(self.notify, f"Scan failed: {e}", severity="error")
+
+    def _refresh_sidebar(self) -> None:
+        try: self.query_one(Sidebar).refresh_tree()
+        except Exception: pass
 
     async def push_view(self, widget: Widget) -> None:
         content = self.query_one("#content", ContentArea)
-        # Hide existing children instead of removing to allow "back"
         for child in list(content.children):
             child.display = False
-            if child not in self.screen_history:
-                self.screen_history.append(child)
+            if child not in self.screen_history: self.screen_history.append(child)
         await content.mount(widget)
 
     async def action_go_back(self) -> None:
         if self.screen_history:
             content = self.query_one("#content", ContentArea)
-            # Remove the current top-most child
             current = content.children[-1] if content.children else None
-            if current:
-                await current.remove()
-            
-            # Restore the previous one
+            if current: await current.remove()
             old = self.screen_history.pop()
             if old:
                 old.display = True
@@ -541,129 +503,101 @@ class KitvcApp(App):
         asyncio.create_task(self._switch_content(name, data, focus_right=focus_right))
 
     async def _switch_content(self, name: str, data: any = None, focus_right: bool = False) -> None:
-        if getattr(self, "_switching", False):
-            return
-            
+        if getattr(self, "_switching", False): return
         if self._current_screen_name == name and self._current_screen_data == data:
-            # If already on screen but focus_right is requested, still do it
-            if focus_right:
-                self._apply_focus_right(name)
+            if focus_right: self._apply_focus_right(name)
             return
-
         self._switching = True
         try:
             content = self.query_one("#content", ContentArea)
-            children = list(content.children)
-            for child in children:
-                await child.remove()
-            
+            for child in list(content.children): await child.remove()
             self.screen_history = []
             self._current_screen_name = name
             self._current_screen_data = data
-            
-            if name == "music":
-                new_screen = MusicLibraryScreen()
-            elif name == "video":
-                new_screen = VideoLibraryScreen()
-            elif name in ("queue", "music_queue", "video_queue"):
-                self.app.player._is_video_mode = (name == "video_queue")
-                new_screen = QueueScreen()
-            elif name == "artist":
-                new_screen = MusicArtistScreen(data)
-            elif name == "music_playlists":
-                self.app.player._is_video_mode = False
-                new_screen = MusicPlaylistScreen()
+            if name == "music": new_screen = MusicLibraryScreen()
+            elif name == "video": new_screen = VideoLibraryScreen()
+            elif name == "video_queue": new_screen = VideoQueueScreen()
+            elif name in ("queue", "music_queue"): new_screen = QueueScreen()
+            elif name == "artist": new_screen = MusicArtistScreen(data)
+            elif name == "music_playlists": new_screen = MusicPlaylistScreen()
             elif name == "video_playlists":
-                self.app.player._is_video_mode = True
                 from .screens.video import VideoPlaylistScreen
                 new_screen = VideoPlaylistScreen()
             elif name == "video_category":
                 from .screens.video import VideoCategoryScreen
                 new_screen = VideoCategoryScreen(data)
-            else:
-                new_screen = None
-            
+            else: new_screen = None
             if new_screen:
                 await content.mount(new_screen)
-                
-                if focus_right:
-                    self._apply_focus_right(name)
-                else:
-                    self.query_one("#nav-tree").focus()
-        except Exception as e:
-            self.notify(f"Error switching screen: {e}", severity="error")
-        finally:
-            self._switching = False
+                if focus_right: self._apply_focus_right(name)
+                else: self.query_one("#nav-tree").focus()
+        except Exception as e: self.notify(f"Error switching screen: {e}", severity="error")
+        finally: self._switching = False
 
     def _apply_focus_right(self, name: str) -> None:
-        # Global focus management (kitvc-1t2)
         if name in ("music_queue", "queue"):
             def focus_queue():
                 try:
                     from .widgets.media_lists import TrackList
-                    from textual.widgets import DataTable
                     tl = self.query_one("#queue-tracks", TrackList)
                     table = tl.query_one(DataTable)
                     table.focus()
-                    if table.row_count > 0:
-                        table.move_cursor(row=0)
-                except Exception:
-                    pass
+                    if table.row_count > 0: table.move_cursor(row=0)
+                except Exception: pass
             self.call_later(focus_queue)
         elif name == "music_playlists":
             def focus_playlists():
                 try:
-                    from textual.widgets import DataTable
                     table = self.query_one("#playlist-selector", DataTable)
                     table.focus()
-                    if table.row_count > 0:
-                        table.move_cursor(row=0)
-                except Exception:
-                    pass
+                    if table.row_count > 0: table.move_cursor(row=0)
+                except Exception: pass
             self.call_later(focus_playlists)
         elif name == "video_playlists":
             def focus_video_playlists():
                 try:
-                    from textual.widgets import DataTable
                     table = self.query_one("#video-playlist-selector", DataTable)
                     table.focus()
-                    if table.row_count > 0:
-                        table.move_cursor(row=0)
-                except Exception:
-                    pass
+                    if table.row_count > 0: table.move_cursor(row=0)
+                except Exception: pass
             self.call_later(focus_video_playlists)
 
     def play_track(self, track: dict, tracks: list[dict] = None, idx: int = 0) -> None:
+        asyncio.create_task(self.video_player.stop())
         if tracks:
             for t in tracks: t["is_video"] = False
-        else:
-            track["is_video"] = False
+        else: track["is_video"] = False
         self._current_media = track
         resume_pos = get_playback_position(track["path"], is_video=False)
-        asyncio.create_task(self._play_queue_with_resume(tracks or [track], idx, resume_pos, is_video=False))
+        asyncio.create_task(self._play_music_with_resume(tracks or [track], idx, resume_pos))
+
+    async def _play_music_with_resume(self, items, idx, pos):
+        await self.music_player.play_queue(items, idx)
+        if pos > 0:
+            await asyncio.sleep(0.5)
+            await self.music_player.seek(pos)
 
     def play_video(self, video: dict, videos: list[dict] = None, idx: int = 0) -> None:
         if videos:
             for v in videos: v["is_video"] = True
-        else:
-            video["is_video"] = True
+        else: video["is_video"] = True
         self._current_media = video
         resume_pos = get_playback_position(video["path"], is_video=True)
-        asyncio.create_task(self._play_queue_with_resume(videos or [video], idx, resume_pos, is_video=True))
+        asyncio.create_task(self._play_video_with_resume(videos or [video], idx, resume_pos))
 
-    async def _play_queue_with_resume(self, items, idx, pos, is_video):
-        await self.player.play_queue(items, idx)
+    async def _play_video_with_resume(self, items, idx, pos):
+        await self.music_player.stop()
+        await self.video_player.play_queue(items, idx)
         if pos > 0:
             await asyncio.sleep(0.5)
-            await self.player.seek(pos)
+            await self.video_player.seek(pos)
 
     def show_playlist_create_dialog(self, callback=None, is_video=False) -> None:
         cb = callback or self._on_playlist_created
         self.push_screen(PlaylistCreateModal(is_video=is_video), callback=cb)
 
     def _on_playlist_created(self, result: bool) -> None:
-        if result:
-            self.query_one(Sidebar).refresh_tree()
+        if result: self.query_one(Sidebar).refresh_tree()
 
     def show_playlist_add_dialog(self, track_paths: list[str], is_video: bool = False) -> None:
         if isinstance(track_paths, str): track_paths = [track_paths]
@@ -676,145 +610,86 @@ class KitvcApp(App):
         with get_connection() as conn:
             p = conn.execute(f"SELECT name FROM {table} WHERE id = ?", (playlist_id,)).fetchone()
         if not p: return
-        
         name = p["name"]
         items = get_playlist_items(playlist_id, is_video=is_video)
-        
-        # Decide export directory (config preference -> music/video fallback)
         config_key = "video_playlist_dir" if is_video else "music_playlist_dir"
         config_dir = self.config.get("playlist", {}).get(config_key)
-        
-        if config_dir:
-            if isinstance(config_dir, list) and config_dir:
-                m3u_dir = Path(config_dir[0])
-            else:
-                m3u_dir = Path(str(config_dir))
+        if config_dir: m3u_dir = Path(config_dir[0]) if isinstance(config_dir, list) else Path(str(config_dir))
         else:
-            if is_video:
-                base_dir = Path(self.config["video"]["directories"][0])
-            else:
-                base_dir = Path(self.config["music"]["directories"][0])
+            base_dir = Path(self.config["video"]["directories"][0]) if is_video else Path(self.config["music"]["directories"][0])
             m3u_dir = base_dir / "Playlists"
-
         m3u_dir.mkdir(parents=True, exist_ok=True)
         m3u_path = m3u_dir / f"{name}.m3u"
-        
         with open(m3u_path, "w", encoding="utf-8") as f:
             f.write("#EXTM3U\n")
             for t in items:
-                dur = t.get("duration", 0)
-                artist = t.get("artist") or t.get("series") or "Unknown"
-                title = t.get("title") or t.get("filename")
-                f.write(f"#EXTINF:{dur},{artist} - {title}\n")
+                f.write(f"#EXTINF:{t.get('duration', 0)},{t.get('artist') or 'Unknown'} - {t.get('title') or t.get('filename')}\n")
                 f.write(f"{t['path']}\n")
 
     async def action_toggle_pause(self) -> None:
-        curr = self.player.get_current_track()
-        if not curr and self.player._queue:
-            await self.player.play_from_queue(0)
-        else:
-            await self.player.toggle_pause()
+        if self.video_player.mpv and self.video_player.get_current_track(): await self.video_player.toggle_pause()
+        elif self.music_player.get_current_track(): await self.music_player.toggle_pause()
+        elif self.music_player._queue: await self.music_player.play_from_queue(0)
 
-    def action_quit(self) -> None:
-        self.push_screen(QuitModal())
+    def action_quit(self) -> None: self.push_screen(QuitModal())
 
     def action_switch_to_queue(self) -> None:
-        name = "video_queue" if self.player._is_video_mode else "music_queue"
+        name = "video_queue" if (self.video_player.mpv and self.video_player.get_current_track()) else "music_queue"
         self.switch_screen(name, focus_right=True)
-        try:
-            sidebar = self.query_one(Sidebar)
-            sidebar.select_node_by_data(name)
-        except Exception:
-            pass
+        try: self.query_one(Sidebar).select_node_by_data(name)
+        except Exception: pass
 
     def action_switch_to_playlists(self) -> None:
-        name = "video_playlists" if self.player._is_video_mode else "music_playlists"
+        name = "video_playlists" if (self.video_player.mpv and self.video_player.get_current_track()) else "music_playlists"
         self.switch_screen(name, focus_right=True)
-        try:
-            sidebar = self.query_one(Sidebar)
-            sidebar.select_node_by_data(name)
-        except Exception:
-            pass
+        try: self.query_one(Sidebar).select_node_by_data(name)
+        except Exception: pass
 
     def action_import_playlist(self) -> None:
-        is_video = self.player._is_video_mode
+        is_video = (self.video_player.mpv and self.video_player.get_current_track())
         config_key = "video_playlist_dir" if is_video else "music_playlist_dir"
         initial_dir = self.config.get("playlist", {}).get(config_key)
-        
-        if isinstance(initial_dir, list) and initial_dir:
-            initial_dir = initial_dir[0]
-        elif not initial_dir:
-            if is_video:
-                initial_dir = self.config["video"]["directories"][0]
-            else:
-                initial_dir = self.config["music"]["directories"][0]
-        
+        if isinstance(initial_dir, list) and initial_dir: initial_dir = initial_dir[0]
+        elif not initial_dir: initial_dir = self.config["video"]["directories"][0] if is_video else self.config["music"]["directories"][0]
         self.push_screen(FileSelectModal(initial_dir=initial_dir, pattern="*.m3u"), callback=self._on_m3u_selected)
 
     def _on_m3u_selected(self, m3u_path: str | None) -> None:
-        if m3u_path:
-            asyncio.create_task(self._do_import_m3u(m3u_path))
+        if m3u_path: asyncio.create_task(self._do_import_m3u(m3u_path))
 
     async def _do_import_m3u(self, m3u_path: str) -> None:
         path = Path(m3u_path)
         name = path.stem
-        is_video = self.player._is_video_mode
-        
+        is_video = (self.video_player.mpv and self.video_player.get_current_track())
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            
+            with open(path, "r", encoding="utf-8") as f: lines = f.readlines()
             tracks = []
             for line in lines:
                 line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                # m3u may have relative paths
-                track_path = Path(line)
-                if not track_path.is_absolute():
-                    track_path = path.parent / track_path
-                tracks.append(str(track_path.resolve()))
-            
+                if not line or line.startswith("#"): continue
+                t_path = Path(line)
+                if not t_path.is_absolute(): t_path = path.parent / t_path
+                tracks.append(str(t_path.resolve()))
             if not tracks:
                 self.notify("No tracks found in M3U", severity="error")
                 return
-
             p_table = "video_playlists" if is_video else "music_playlists"
             i_table = "video_playlist_files" if is_video else "music_playlist_tracks"
             col = "file_path" if is_video else "track_path"
-
             with get_connection() as conn:
-                # Create playlist or get existing
                 conn.execute(f"INSERT OR IGNORE INTO {p_table} (name) VALUES (?)", (name,))
                 p = conn.execute(f"SELECT id FROM {p_table} WHERE name = ?", (name,)).fetchone()
                 p_id = p["id"]
-                
-                # Clear existing tracks for this playlist to rebuild it
                 conn.execute(f"DELETE FROM {i_table} WHERE playlist_id = ?", (p_id,))
-                
                 for i, t_path in enumerate(tracks):
-                    conn.execute(f"INSERT INTO {i_table} (playlist_id, {col}, sort_order) VALUES (?, ?, ?)",
-                                 (p_id, t_path, i))
-            
+                    conn.execute(f"INSERT INTO {i_table} (playlist_id, {col}, sort_order) VALUES (?, ?, ?)", (p_id, t_path, i))
             self.notify(f"Imported '{name}' with {len(tracks)} items")
             self.query_one(Sidebar).refresh_tree()
-            # If we are on Playlists screen, refresh it
-            screen_name = "video_playlists" if is_video else "music_playlists"
-            if self._current_screen_name == screen_name:
-                try:
-                    if is_video:
-                        from .screens.video import VideoPlaylistScreen
-                        self.query_one(VideoPlaylistScreen).reload_playlists()
-                    else:
-                        from .screens.music import MusicPlaylistScreen
-                        self.query_one(MusicPlaylistScreen).reload_playlists()
-                except Exception:
-                    pass
-        except Exception as e:
-            self.notify(f"Import failed: {e}", severity="error")
+        except Exception as e: self.notify(f"Import failed: {e}", severity="error")
 
     async def on_unmount(self) -> None:
-        await self.player.shutdown()
+        await self.mpv_info.shutdown()
+        await self.music_player.shutdown()
+        await self.video_player.shutdown()
 
 if __name__ == "__main__":
     app = KitvcApp()

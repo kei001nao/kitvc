@@ -67,7 +67,7 @@ def _read_music_tags(path: str) -> dict | None:
 
 class MusicLibrary:
     def __init__(self, directories: list[str]):
-        self.directories = [os.path.expanduser(d) for d in directories]
+        self.directories = [os.path.abspath(os.path.expanduser(d)) for d in directories]
 
     def scan(self, progress_cb: Optional[Callable[[str], None]] = None):
         found_paths = set()
@@ -83,7 +83,7 @@ class MusicLibrary:
                 for fname in sorted(files):
                     if os.path.splitext(fname)[1].lower() not in AUDIO_EXTENSIONS:
                         continue
-                    path = os.path.join(root, fname)
+                    path = os.path.normpath(os.path.join(root, fname))
                     found_paths.add(path)
                     
                     mtime = os.path.getmtime(path)
@@ -96,17 +96,16 @@ class MusicLibrary:
                             tags["mtime"] = mtime
                             update_music_track(tags)
 
-        # Remove tracks that are no longer present
-        if found_paths:
-            remove_missing_files(list(found_paths), "music_tracks")
+        # Remove tracks that are no longer present - ALWAYS call this
+        remove_missing_files(list(found_paths), "music_tracks")
 
 from .utils import generate_thumbnail
 
 class VideoLibrary:
     def __init__(self, directories: list[str]):
-        self.directories = [os.path.expanduser(d) for d in directories]
+        self.directories = [os.path.abspath(os.path.expanduser(d)) for d in directories]
 
-    def scan(self, progress_cb: Optional[Callable[[str], None]] = None):
+    def scan(self, progress_cb: Optional[Callable[[str], None]] = None, meta_cb: Optional[Callable[[str], dict]] = None):
         found_paths = set()
         
         with get_connection() as conn:
@@ -119,7 +118,7 @@ class VideoLibrary:
                 for fname in sorted(files):
                     if os.path.splitext(fname)[1].lower() not in VIDEO_EXTENSIONS:
                         continue
-                    path = os.path.join(root, fname)
+                    path = os.path.normpath(os.path.join(root, fname))
                     found_paths.add(path)
                     
                     mtime = os.path.getmtime(path)
@@ -128,14 +127,23 @@ class VideoLibrary:
                             progress_cb(fname)
                         
                         thumb = generate_thumbnail(path)
+                        duration = 0
+                        if meta_cb:
+                            try:
+                                meta = meta_cb(path)
+                                duration = meta.get("duration", 0)
+                            except Exception:
+                                pass
+
                         video_data = {
                             "path": path,
                             "mtime": mtime,
                             "filename": fname,
                             "size": os.path.getsize(path),
+                            "duration": duration,
                             "thumbnail_path": thumb
                         }
                         update_video_file(video_data)
 
-        if found_paths:
-            remove_missing_files(list(found_paths), "video_files")
+        # Always clean up missing files
+        remove_missing_files(list(found_paths), "video_files")

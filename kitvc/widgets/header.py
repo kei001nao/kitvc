@@ -45,13 +45,13 @@ class Header(Widget):
         with Vertical():
             with Horizontal(id="header-info"):
                 yield Label("Nothing playing", id="header-playback")
-            yield ProgressBar(id="header-progress", show_eta=False, show_percentage=False)
+            yield ProgressBar(id="header-progress", total=100, show_eta=False, show_percentage=False)
 
     def update_info(self, title: str, artist: str, position: float, duration: float, volume: int, queue_pos: str = "") -> None:
         playback_label = self.query_one("#header-playback", Label)
         
-        cur_m, cur_s = divmod(int(position), 60)
-        dur_m, dur_s = divmod(int(duration), 60)
+        cur_m, cur_s = divmod(int(position or 0), 60)
+        dur_m, dur_s = divmod(int(duration or 0), 60)
         time_str = f"{cur_m:02d}:{cur_s:02d} / {dur_m:02d}:{dur_s:02d}"
         
         info_parts = []
@@ -68,15 +68,12 @@ class Header(Widget):
         playback_label.update("  |  ".join(info_parts))
 
         pb = self.query_one("#header-progress", ProgressBar)
-        if duration > 0:
-            pb.total = duration
-            pb.progress = position
+        if duration and duration > 0:
+            pb.update(total=duration, progress=position or 0)
         else:
-            pb.total = 100
-            pb.progress = 0
+            pb.update(total=100, progress=0)
 
     def clear(self) -> None:
         self.query_one("#header-playback", Label).update("Nothing playing")
         pb = self.query_one("#header-progress", ProgressBar)
-        pb.total = 100
-        pb.progress = 0
+        pb.update(total=100, progress=0)

@@ -92,7 +92,7 @@ class VideoCategoryScreen(Widget):
                 self.app.notify(f"Category is now empty")
             except Exception:
                 pass
-            return
+
 
         self.query_one(VideoList).load(videos)
 
@@ -176,6 +176,9 @@ class VideoPlaylistScreen(Widget):
             if event.control.id != "video-playlist-selector":
                 return
 
+            if event.row_key is None:
+                return
+
             idx = int(str(event.row_key.value))
             if getattr(self, "_current_playlist_idx", -1) == idx:
                 return
@@ -198,7 +201,6 @@ class VideoPlaylistScreen(Widget):
         vl = self.query_one("#video-playlist-tracks", VideoList)
         from textual.widgets import DataTable as TextualDataTable
         
-        # Check if focus is within VideoList's DataTable
         try:
             table_videos = vl.query_one(TextualDataTable)
             vl_focused = table_videos.has_focus
@@ -229,13 +231,13 @@ class VideoPlaylistScreen(Widget):
                 event.stop()
             elif event.key == "q" and table_selector.cursor_row is not None:
                 if vl._videos:
-                    self.app.player.add_to_queue(vl._videos)
+                    self.app.video_player.add_to_queue(vl._videos)
                     self.app.notify(f"Added all videos from playlist to queue")
                 event.stop()
         
         elif vl_focused:
             if event.key == "q":
-                self.app.player.add_to_queue(vl._videos)
+                self.app.video_player.add_to_queue(vl._videos)
                 self.app.notify(f"Added {len(vl._videos)} videos to queue")
                 event.stop()
                 return
@@ -273,6 +275,7 @@ class VideoPlaylistScreen(Widget):
                                 event.stop()
                     except Exception:
                         pass
+
 
     def _after_playlist_created(self, result: bool) -> None:
         if result:
@@ -437,7 +440,3 @@ class VideoEditModal(Screen):
         except ValueError:
             self.app.notify("Invalid number for Season/Episode", severity="error")
 
-    def on_key(self, event) -> None:
-        if event.key == "escape":
-            self.dismiss(False)
-            event.stop()
