@@ -13,6 +13,18 @@ def init_db():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with get_connection() as conn:
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS music_albums (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                artist TEXT,
+                title TEXT,
+                release_date TEXT,
+                cover_path TEXT,
+                mbid TEXT,
+                comment TEXT,
+                UNIQUE(artist, title)
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS music_tracks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 path TEXT UNIQUE,
@@ -23,11 +35,12 @@ def init_db():
                 album_artist TEXT,
                 track_num INTEGER,
                 disc_num INTEGER,
-                year INTEGER,
                 genre TEXT,
                 bpm REAL,
                 duration INTEGER,
-                last_pos REAL DEFAULT 0
+                last_pos REAL DEFAULT 0,
+                album_id INTEGER,
+                FOREIGN KEY(album_id) REFERENCES music_albums(id)
             )
         """)
         conn.execute("""
@@ -45,7 +58,13 @@ def init_db():
                 title TEXT,
                 duration INTEGER DEFAULT 0,
                 last_pos REAL DEFAULT 0,
-                thumbnail_path TEXT
+                thumbnail_path TEXT,
+                synopsis TEXT,
+                cast TEXT,
+                director TEXT,
+                year INTEGER,
+                tmdb_id TEXT,
+                poster_path TEXT
             )
         """)
         # Separate Playlist tables for Music and Video
@@ -78,6 +97,51 @@ def init_db():
             )
         """)
         
+        # Migration: Add missing columns if they don't exist
+        for table, cols in {
+            "music_tracks": [
+                ("cover_path", "TEXT"), ("mbid", "TEXT"), ("comment", "TEXT"),
+                ("release_date", "TEXT")
+            ],
+            "video_files": [
+                ("duration", "INTEGER DEFAULT 0"),
+                ("synopsis", "TEXT"), ("cast", "TEXT"), ("director", "TEXT"),
+                ("year", "INTEGER"), ("tmdb_id", "TEXT"), ("poster_path", "TEXT")
+            ]
+        }.items():
+            existing_cols = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            for col_name, col_type in cols:
+                if col_name not in existing_cols:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+
+        # Special migration for music_tracks: copy year to release_date if year exists and release_date is empty
+        existing_cols = [row["name"] for row in conn.execute("PRAGMA table_info(music_tracks)").fetchall()]
+        if "year" in existing_cols and "release_date" in existing_cols:
+            conn.execute("UPDATE music_tracks SET release_date = CAST(year AS TEXT) WHERE (release_date IS NULL OR release_date = '') AND year IS NOT NULL")
+        
+        if "album_id" not in existing_cols:
+            conn.execute("ALTER TABLE music_tracks ADD COLUMN album_id INTEGER REFERENCES music_albums(id)")
+
+        # Populate music_albums from music_tracks
+        conn.execute("""
+            INSERT OR IGNORE INTO music_albums (artist, title, release_date, cover_path, mbid, comment)
+            SELECT artist, album, MAX(release_date), MAX(cover_path), MAX(mbid), MAX(comment)
+            FROM music_tracks
+            WHERE album IS NOT NULL
+            GROUP BY artist, album
+        """)
+        
+        # Link music_tracks to music_albums
+        conn.execute("""
+            UPDATE music_tracks
+            SET album_id = (
+                SELECT id FROM music_albums 
+                WHERE music_albums.artist = music_tracks.artist 
+                AND music_albums.title = music_tracks.album
+            )
+            WHERE album_id IS NULL
+        """)
+
         # Migration: Move data from old tables if they exist
         try:
             # Check if old table exists
@@ -141,12 +205,19 @@ def get_playlist_items(playlist_id, is_video=False):
     col = "file_path" if is_video else "track_path"
     
     with get_connection() as conn:
-        items = [dict(row) for row in conn.execute(f"""
-            SELECT d.* FROM {d_table} d
-            JOIN {i_table} i ON d.path = i.{col}
-            WHERE i.playlist_id = ? 
-            ORDER BY i.sort_order
-        """, (playlist_id,)).fetchall()]
+        if is_video:
+            query = f"SELECT d.* FROM {d_table} d JOIN {i_table} i ON d.path = i.{col} WHERE i.playlist_id = ? ORDER BY i.sort_order"
+        else:
+            query = f"""
+                SELECT d.*, a.release_date, a.cover_path, a.mbid, a.comment as album_comment 
+                FROM {d_table} d
+                LEFT JOIN music_albums a ON d.album_id = a.id
+                JOIN {i_table} i ON d.path = i.{col}
+                WHERE i.playlist_id = ? 
+                ORDER BY i.sort_order
+            """
+        
+        items = [dict(row) for row in conn.execute(query, (playlist_id,)).fetchall()]
         
         for item in items:
             item["is_video"] = is_video
@@ -169,17 +240,56 @@ def get_playback_position(path, is_video=False):
 
 def update_music_track(track_data):
     with get_connection() as conn:
+        # 1. Ensure Album exists and has data
+        existing_album = conn.execute(
+            "SELECT id, release_date, cover_path, mbid, comment FROM music_albums WHERE artist = ? AND title = ?", 
+            (track_data["artist"], track_data["album"])
+        ).fetchone()
+
+        if not existing_album:
+            cursor = conn.execute("""
+                INSERT INTO music_albums (artist, title, release_date, cover_path, mbid, comment)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                track_data["artist"], track_data["album"],
+                track_data.get("release_date"), track_data.get("cover_path"),
+                track_data.get("mbid"), track_data.get("comment")
+            ))
+            album_id = cursor.lastrowid
+        else:
+            album_id = existing_album["id"]
+            # Update album metadata if current track has more info (e.g. mbid found now)
+            updates = {}
+            for field in ["release_date", "cover_path", "mbid", "comment"]:
+                if track_data.get(field) and not existing_album[field]:
+                    updates[field] = track_data[field]
+            
+            if updates:
+                set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+                conn.execute(f"UPDATE music_albums SET {set_clause} WHERE id = ?", (*updates.values(), album_id))
+
+        # 2. Update/Insert Track (Note: redundant fields removed from SQL)
         conn.execute("""
             INSERT OR REPLACE INTO music_tracks (
                 path, mtime, title, artist, album, album_artist, 
-                track_num, disc_num, year, genre, bpm, duration
+                track_num, disc_num, genre, bpm, duration, album_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             track_data["path"], track_data["mtime"], track_data["title"],
             track_data["artist"], track_data["album"], track_data["album_artist"],
-            track_data["track_num"], track_data["disc_num"], track_data["year"],
-            track_data["genre"], track_data["bpm"], track_data["duration"]
+            track_data["track_num"], track_data["disc_num"],
+            track_data["genre"], track_data["bpm"], track_data["duration"],
+            album_id
         ))
+
+def get_album_by_id(album_id: int):
+    with get_connection() as conn:
+        return conn.execute("SELECT * FROM music_albums WHERE id = ?", (album_id,)).fetchone()
+
+def remove_unused_albums():
+    with get_connection() as conn:
+        conn.execute("DELETE FROM music_albums WHERE id NOT IN (SELECT DISTINCT album_id FROM music_tracks)")
+
 
 from .utils import parse_video_filename
 
@@ -191,23 +301,32 @@ def update_video_file(video_data):
         if existing:
             conn.execute("""
                 UPDATE video_files SET 
-                    mtime = ?, filename = ?, size = ?, duration = ?, thumbnail_path = ?
+                    mtime = ?, filename = ?, size = ?, duration = ?, thumbnail_path = ?,
+                    synopsis = ?, cast = ?, director = ?, year = ?, tmdb_id = ?, poster_path = ?
                 WHERE path = ?
-            """, (video_data["mtime"], video_data["filename"], video_data["size"], 
-                  video_data.get("duration", 0), video_data.get("thumbnail_path"), video_data["path"]))
+            """, (
+                video_data["mtime"], video_data["filename"], video_data["size"], 
+                video_data.get("duration", 0), video_data.get("thumbnail_path"),
+                video_data.get("synopsis"), video_data.get("cast"), video_data.get("director"),
+                video_data.get("year"), video_data.get("tmdb_id"), video_data.get("poster_path"),
+                video_data["path"]
+            ))
         else:
             # New file: Auto-classify
             meta = parse_video_filename(video_data["filename"])
             conn.execute("""
                 INSERT INTO video_files (
                     path, mtime, filename, size, duration,
-                    series, season, episode, thumbnail_path
+                    series, season, episode, thumbnail_path,
+                    synopsis, cast, director, year, tmdb_id, poster_path
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 video_data["path"], video_data["mtime"], video_data["filename"], 
                 video_data["size"], video_data.get("duration", 0), meta.get("series"), 
-                meta.get("season"), meta.get("episode"), video_data.get("thumbnail_path")
+                meta.get("season"), meta.get("episode"), video_data.get("thumbnail_path"),
+                video_data.get("synopsis"), video_data.get("cast"), video_data.get("director"),
+                video_data.get("year"), video_data.get("tmdb_id"), video_data.get("poster_path")
             ))
 
 def update_video_manual_fields(path, fields):

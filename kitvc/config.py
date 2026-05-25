@@ -23,6 +23,9 @@ DEFAULT_CONFIG = {
     },
     "theme": {
         "watch_interval": 2,
+    },
+    "ui": {
+        "sidebar_width": 44,
     }
 }
 

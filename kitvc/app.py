@@ -1,5 +1,15 @@
 import asyncio
+import logging
 from pathlib import Path
+
+# Setup logging
+logging.basicConfig(
+    filename='kitvc.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -65,10 +75,13 @@ class Sidebar(Widget):
 
     @work(thread=True)
     def refresh_tree(self) -> None:
-        with get_connection() as conn:
-            artists = [row["artist"] for row in conn.execute("SELECT DISTINCT artist FROM music_tracks ORDER BY artist COLLATE NOCASE").fetchall()]
-            categories = [row["category"] for row in conn.execute("SELECT DISTINCT category FROM video_files ORDER BY category").fetchall()]
-        self.app.call_from_thread(self._populate_tree, artists, categories)
+        try:
+            with get_connection() as conn:
+                artists = [row["artist"] for row in conn.execute("SELECT DISTINCT artist FROM music_tracks ORDER BY artist COLLATE NOCASE").fetchall()]
+                categories = [row["category"] for row in conn.execute("SELECT DISTINCT category FROM video_files ORDER BY category").fetchall()]
+            self.app.call_from_thread(self._populate_tree, artists, categories)
+        except Exception as e:
+            logger.error(f"Sidebar.refresh_tree failed: {e}")
 
     def _populate_tree(self, artists: list[str], categories: list[str]) -> None:
         tree = self.query_one("#nav-tree", Tree)
@@ -280,9 +293,11 @@ class KitvcApp(App):
         Binding("H", "seek(-30)", "Seek -30s", show=False),
         Binding("9", "volume_down", "Vol -10%", show=False),
         Binding("0", "volume_up", "Vol +10%", show=False),
+        Binding("ctrl+right_square_bracket", "resize_sidebar(2)", "Resize +", show=False),
+        Binding("ctrl+left_square_bracket", "resize_sidebar(-2)", "Resize -", show=False),
     ]
 
-    def _generate_css(self, primary: str, accent: str, bg: str, surface: str) -> str:
+    def _generate_css(self, primary: str, accent: str, bg: str, surface: str, sidebar_width: int = 44) -> str:
         return f"""
         $primary: {primary};
         $accent: {accent};
@@ -291,7 +306,7 @@ class KitvcApp(App):
 
         App {{ background: $background; }}
         #main-layout {{ layout: horizontal; height: 1fr; }}
-        Sidebar {{ width: 44; border-right: solid $primary; background: $background; }}
+        Sidebar {{ width: {sidebar_width}; border-right: solid $primary; background: $background; }}
         Sidebar #app-title {{ height: auto; color: $primary; text-style: bold; margin: 0 0 1 1; }}
         Tree {{ background: transparent; scrollbar-color: $primary; scrollbar-size: 1 1; }}
         DataTable {{ scrollbar-color: $primary; scrollbar-size: 1 1; }}
@@ -317,30 +332,61 @@ class KitvcApp(App):
         """
 
     def __init__(self):
-        theme = load_theme()
-        colors = theme.get("colors", {})
-        primary = colors.get("primary", "deepskyblue")
-        accent = colors.get("accent", "magenta")
-        bg = colors.get("background", "")
-        surface = colors.get("surface", "")
-        if not bg: bg = "$background"
-        if not surface: surface = "$surface"
-        self.CSS = self._generate_css(primary, accent, bg, surface)
+        logger.info("Initializing KitvcApp")
+        try:
+            init_db()  # Initialize DB before anything else
+            self.config = load_config()
+            theme = load_theme()
+            colors = theme.get("colors", {})
+            primary = colors.get("primary", "deepskyblue")
+            accent = colors.get("accent", "magenta")
+            bg = colors.get("background", "")
+            surface = colors.get("surface", "")
+            if not bg: bg = "$background"
+            if not surface: surface = "$surface"
+            
+            sidebar_width = self.config.get("ui", {}).get("sidebar_width", 44)
+            self.CSS = self._generate_css(primary, accent, bg, surface, sidebar_width)
+            
+            super().__init__()
+            self.mpv_info = MpvInfo()
+            self.music_player = MusicPlayer(self.config)
+            self.video_player = VideoPlayer(self.config)
+            self.music_lib = MusicLibrary(self.config["music"]["directories"])
+            self.video_lib = VideoLibrary(self.config["video"]["directories"])
+            self.screen_history = []
+            self._last_playlist_add_idx = 0
+            self._current_media = None
+            self._current_screen_name = None
+            self._current_screen_data = None
+            self._theme_mtime = 0.0
+            if THEME_PATH.exists():
+                self._theme_mtime = THEME_PATH.stat().st_mtime
+        except Exception as e:
+            logger.exception("Error during KitvcApp.__init__")
+            raise
+
+    def action_resize_sidebar(self, delta: int) -> None:
+        try:
+            sidebar = self.query_one("Sidebar")
+        except Exception:
+            return
+
+        if "ui" not in self.config:
+            self.config["ui"] = {}
         
-        super().__init__()
-        self.config = load_config()
-        self.mpv_info = MpvInfo()
-        self.music_player = MusicPlayer(self.config)
-        self.video_player = VideoPlayer(self.config)
-        self.music_lib = MusicLibrary(self.config["music"]["directories"])
-        self.video_lib = VideoLibrary(self.config["video"]["directories"])
-        self.screen_history = []
-        self._last_playlist_add_idx = 0
-        self._current_screen_name = None
-        self._current_screen_data = None
-        self._theme_mtime = 0.0
-        if THEME_PATH.exists():
-            self._theme_mtime = THEME_PATH.stat().st_mtime
+        current_width = self.config["ui"].get("sidebar_width", 44)
+        new_width = max(10, min(100, current_width + delta))
+        
+        if new_width != current_width:
+            self.config["ui"]["sidebar_width"] = new_width
+            sidebar.styles.width = new_width
+            
+            from .config import save_config
+            save_config(self.config)
+            # No need to refresh_css if we update styles.width directly
+        else:
+            self.notify(f"Sidebar width at limit: {new_width}", severity="warning")
 
     def _apply_theme(self) -> None:
         pass
@@ -353,15 +399,19 @@ class KitvcApp(App):
         yield Label("  ctrl+q: Quit | p: Play/Pause | ctrl+s: Scan | h/l: Seek | 1: Queue | 2: PlayLists | ctrl+o: Import M3U", id="footer")
 
     async def on_mount(self) -> None:
-        self._apply_theme()
-        init_db()
-        await self.mpv_info.start()
-        await self.music_player.start()
-        self.set_interval(0.5, self._poll_player)
-        self.scan_libraries(asyncio.get_running_loop())
-        watch_interval = self.config.get("theme", {}).get("watch_interval", 2)
-        if watch_interval > 0:
-            self.set_interval(watch_interval, self._watch_theme)
+        logger.info("Mounting KitvcApp")
+        try:
+            self._apply_theme()
+            await self.mpv_info.start()
+            await self.music_player.start()
+            self.set_interval(0.5, self._poll_player)
+            self.scan_libraries(asyncio.get_running_loop())
+            watch_interval = self.config.get("theme", {}).get("watch_interval", 2)
+            if watch_interval > 0:
+                self.set_interval(watch_interval, self._watch_theme)
+        except Exception as e:
+            logger.exception("Error during KitvcApp.on_mount")
+            self.notify(f"Startup error: {e}", severity="error")
 
     async def _poll_player(self) -> None:
         header = self.query_one("#header", Header)
@@ -382,6 +432,19 @@ class KitvcApp(App):
         
         track = active_player.get_current_track()
         if pos is not None and dur is not None and track:
+            # For music, we need to ensure we have album info (joined from music_albums if needed)
+            if not track.get("is_video") and "cover_path" not in track:
+                with get_connection() as conn:
+                    # Refresh metadata from DB (in case it was updated by scan)
+                    row = conn.execute("""
+                        SELECT t.*, a.cover_path, a.release_date, a.mbid, a.comment as album_comment
+                        FROM music_tracks t
+                        LEFT JOIN music_albums a ON t.album_id = a.id
+                        WHERE t.path = ?
+                    """, (track["path"],)).fetchone()
+                    if row:
+                        track.update(dict(row))
+
             self._current_media = track
             title = track.get("title") or track.get("filename")
             artist = track.get("artist") or track.get("series") or ""
@@ -440,7 +503,9 @@ class KitvcApp(App):
                 surface = colors.get("surface", "")
                 if not bg: bg = "$background"
                 if not surface: surface = "$surface"
-                new_css = self._generate_css(primary, accent, bg, surface)
+                
+                sidebar_width = self.config.get("ui", {}).get("sidebar_width", 44)
+                new_css = self._generate_css(primary, accent, bg, surface, sidebar_width)
                 css_key = None
                 for key in self.stylesheet.source.keys():
                     if isinstance(key, tuple) and len(key) == 2 and key[1].endswith(".CSS"):
@@ -460,19 +525,22 @@ class KitvcApp(App):
 
     @work(thread=True)
     def scan_libraries(self, loop: asyncio.AbstractEventLoop) -> None:
+        logger.info("Starting library scan")
         try:
             def on_music_progress(f): self.call_from_thread(self.notify, f"Scanning music: {f}", timeout=1)
             def on_video_progress(f): self.call_from_thread(self.notify, f"Scanning video: {f}", timeout=1)
-            def get_video_meta(path):
-                try:
-                    fut = asyncio.run_coroutine_threadsafe(self.mpv_info.get_metadata(path), loop)
-                    return fut.result(timeout=10)
-                except Exception: return {}
+            
+            logger.info("Scanning music library...")
             self.music_lib.scan(progress_cb=on_music_progress)
-            self.video_lib.scan(progress_cb=on_video_progress, meta_cb=get_video_meta)
+            
+            logger.info("Scanning video library...")
+            self.video_lib.scan(progress_cb=on_video_progress)
+            
+            logger.info("Library scan complete!")
             self.call_from_thread(self.notify, "Library scan complete!")
             self.call_from_thread(self._refresh_sidebar)
         except Exception as e:
+            logger.exception("Error during library scan")
             self.call_from_thread(self.notify, f"Scan failed: {e}", severity="error")
 
     def _refresh_sidebar(self) -> None:

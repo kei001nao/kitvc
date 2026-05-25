@@ -56,7 +56,7 @@ class MusicArtistScreen(Widget):
     MusicArtistScreen Label { text-style: bold; margin-bottom: 0; }
     MusicArtistScreen #music-artist-heading { margin-bottom: 1; }
     MusicArtistScreen .playlist-help { color: $text-muted; margin-bottom: 1; }
-    MusicArtistScreen DataTable#music-albums { height: 8; background: $surface; border: solid $primary; margin-bottom: 1; }
+    MusicArtistScreen DataTable#music-albums { height: 11; background: $surface; border: solid $primary; margin-bottom: 1; }
     MusicArtistScreen DataTable#music-albums:focus { border: tall $accent; }
     MusicArtistScreen TrackList { height: 1fr; border: solid $primary; background: $surface; }
     MusicArtistScreen TrackList:focus-within { border: tall $accent; }
@@ -80,15 +80,20 @@ class MusicArtistScreen(Widget):
 
     def on_mount(self) -> None:
         table = self.query_one("#music-albums", DataTable)
-        table.add_column("Year", key="year", width=6)
+        table.fixed_columns = 1
+        table.styles.height = 11  # Ensure height is set
+        table.fixed_row_height = 3 # Use fixed_row_height attribute
+        table.add_column("Art", key="art", width=5)
+        table.add_column("Date", key="release_date", width=12)
         table.add_column("Album", key="album")
         self._load_albums()
 
     @work(thread=True)
     def _load_albums(self) -> None:
         with get_connection() as conn:
+            # Query the music_albums table directly
             albums = [dict(row) for row in conn.execute(
-                "SELECT DISTINCT album, year FROM music_tracks WHERE artist = ? ORDER BY year DESC, album", 
+                "SELECT title as album, release_date, cover_path FROM music_albums WHERE artist = ? ORDER BY release_date DESC, title", 
                 (self._artist_name,)
             ).fetchall()]
         self.app.call_from_thread(self._populate_albums, albums)
@@ -99,8 +104,11 @@ class MusicArtistScreen(Widget):
         table.clear()
         self._current_album_idx = -1
         for i, album in enumerate(albums):
-            year = str(album['year']) if album['year'] else ""
-            table.add_row(year, album['album'], key=str(i))
+            date_str = album['release_date'] or ""
+            # Character based art preview placeholder (5x3 box if we had image widget support in cell)
+            # For now, use a visual mark [▣] or similar if cover exists
+            art_mark = " [▣]" if album.get("cover_path") else " [ ]"
+            table.add_row(art_mark, date_str, album['album'], key=str(i))
         if albums:
             self._current_album_idx = 0
             self._load_tracks(albums[0]['album'])
@@ -153,7 +161,13 @@ class MusicArtistScreen(Widget):
     def _load_tracks(self, album_name: str) -> None:
         with get_connection() as conn:
             tracks = [dict(row) for row in conn.execute(
-                "SELECT * FROM music_tracks WHERE artist = ? AND album = ? ORDER BY disc_num, track_num",
+                """
+                SELECT t.*, a.release_date, a.cover_path, a.mbid, a.comment as album_comment
+                FROM music_tracks t
+                LEFT JOIN music_albums a ON t.album_id = a.id
+                WHERE t.artist = ? AND t.album = ? 
+                ORDER BY t.disc_num, t.track_num
+                """,
                 (self._artist_name, album_name)
             ).fetchall()]
         self._current_album_tracks = tracks

@@ -75,7 +75,9 @@ class MpvInstance:
                 pass
 
     async def cmd(self, command: list, *, wait: bool = False):
+        # print(f"[MPV-CMD] {self.socket_path}: {command}")
         if not self._writer:
+            print(f"[MPV-ERROR] {self.socket_path}: No writer")
             return None
         self._req_id += 1
         req_id = self._req_id
@@ -86,13 +88,17 @@ class MpvInstance:
         try:
             self._writer.write(msg.encode())
             await self._writer.drain()
-        except (ConnectionError, BrokenPipeError, OSError):
+        except (ConnectionError, BrokenPipeError, OSError) as e:
+            print(f"[MPV-ERROR] {self.socket_path}: {e}")
             return None
 
         if wait:
             try:
-                return await asyncio.wait_for(asyncio.shield(fut), timeout=3.0)
+                res = await asyncio.wait_for(asyncio.shield(fut), timeout=3.0)
+                # print(f"[MPV-RES] {self.socket_path} ({req_id}): {res}")
+                return res
             except asyncio.TimeoutError:
+                print(f"[MPV-TIMEOUT] {self.socket_path} ({req_id}): {command}")
                 self._pending.pop(req_id, None)
                 return None
             except asyncio.CancelledError:
