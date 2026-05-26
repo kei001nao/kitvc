@@ -3,6 +3,7 @@ import subprocess
 import json
 import mutagen
 import logging
+import hashlib
 from mutagen.easyid3 import EasyID3
 from mutagen.flac import FLAC
 from mutagen.mp3 import MP3
@@ -17,12 +18,13 @@ AUDIO_EXTENSIONS = {".flac", ".mp3", ".opus", ".ogg", ".m4a", ".aac", ".wav", ".
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v"}
 
 def _extract_cover_art(path: str) -> str | None:
-    """Extract embedded cover art and save to a temporary file."""
+    """Extract embedded cover art and save to a stable location."""
     try:
         covers_dir = CONFIG_DIR / "covers"
         covers_dir.mkdir(parents=True, exist_ok=True)
         
-        file_hash = str(hash(path))
+        # Use stable hash (MD5) instead of unstable hash()
+        file_hash = hashlib.md5(path.encode()).hexdigest()
         target = covers_dir / f"{file_hash}.jpg"
         
         if target.exists():
@@ -157,6 +159,7 @@ class MusicLibrary:
         self.directories = [os.path.abspath(os.path.expanduser(d)) for d in directories]
 
     def scan(self, progress_cb: Optional[Callable[[str], None]] = None):
+        """Phase 1: Fast local tag scan."""
         try:
             found_paths = set()
             with get_connection() as conn:
@@ -177,35 +180,6 @@ class MusicLibrary:
                             if tags:
                                 tags["path"] = path
                                 tags["mtime"] = mtime
-                                
-                                # Check if album already has metadata
-                                with get_connection() as conn:
-                                    album_info = conn.execute(
-                                        "SELECT mbid, release_date, cover_path FROM music_albums WHERE artist = ? AND title = ?",
-                                        (tags["artist"], tags["album"])
-                                    ).fetchone()
-
-                                # Auto-fetch MusicBrainz metadata if MBID or cover is missing
-                                if not album_info or not album_info["mbid"] or not album_info["cover_path"]:
-                                    if not tags.get("mbid"):
-                                        # Attempt to find MBID
-                                        mbid = search_release(tags["artist"], tags["album"])
-                                        if mbid:
-                                            tags["mbid"] = mbid
-                                            # Fetch more details
-                                            ext_meta = fetch_music_metadata(mbid)
-                                            if ext_meta:
-                                                if ext_meta.get("date"):
-                                                    tags["release_date"] = ext_meta["date"]
-                                                if ext_meta.get("comment"):
-                                                    tags["comment"] = ext_meta["comment"]
-                                            
-                                            # If no embedded cover, try downloading
-                                            if not tags.get("cover_path"):
-                                                local_cover = download_cover_art(mbid, CONFIG_DIR / "covers")
-                                                if local_cover:
-                                                    tags["cover_path"] = local_cover
-                                
                                 update_music_track(tags)
 
             remove_missing_files(list(found_paths), "music_tracks")
@@ -213,6 +187,60 @@ class MusicLibrary:
         except Exception as e:
             logger.exception("MusicLibrary.scan failed")
             raise e
+
+    def enrich_metadata(self, progress_cb: Optional[Callable[[str], None]] = None, force: bool = False):
+        """Phase 2: Fetch missing album info from internet."""
+        try:
+            with get_connection() as conn:
+                if force:
+                    albums = conn.execute("SELECT id, artist, title, mbid, cover_path FROM music_albums").fetchall()
+                else:
+                    # Target albums with missing MBID or cover
+                    albums = conn.execute(
+                        "SELECT id, artist, title, mbid, cover_path FROM music_albums WHERE mbid IS NULL OR cover_path IS NULL"
+                    ).fetchall()
+
+            for album in albums:
+                album_id = album["id"]
+                artist = album["artist"]
+                title = album["title"]
+                mbid = album["mbid"]
+                
+                if progress_cb:
+                    progress_cb(f"Fetching metadata for: {artist} - {title}")
+                
+                updates = {}
+                
+                # 1. Search for MBID if missing
+                if not mbid:
+                    mbid = search_release(artist, title)
+                    if mbid:
+                        updates["mbid"] = mbid
+                        logger.info(f"Found MBID for {artist} - {title}: {mbid}")
+                
+                # 2. Fetch detailed metadata if we have MBID
+                if mbid:
+                    ext_meta = fetch_music_metadata(mbid)
+                    if ext_meta:
+                        if ext_meta.get("date"): updates["release_date"] = ext_meta["date"]
+                        if ext_meta.get("comment"): updates["comment"] = ext_meta["comment"]
+                        
+                        # 3. Download cover if missing or forced
+                        if force or not album["cover_path"]:
+                            local_cover = download_cover_art(mbid, CONFIG_DIR / "covers")
+                            if local_cover:
+                                updates["cover_path"] = local_cover
+                                logger.info(f"Downloaded cover for {artist} - {title}")
+                
+                if updates:
+                    with get_connection() as conn:
+                        set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+                        params = list(updates.values())
+                        params.append(album_id)
+                        conn.execute(f"UPDATE music_albums SET {set_clause} WHERE id = ?", params)
+                        
+        except Exception as e:
+            logger.exception("MusicLibrary.enrich_metadata failed")
 
 from .utils import generate_thumbnail
 

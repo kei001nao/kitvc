@@ -529,20 +529,28 @@ class KitvcApp(App):
         try:
             def on_music_progress(f): self.call_from_thread(self.notify, f"Scanning music: {f}", timeout=1)
             def on_video_progress(f): self.call_from_thread(self.notify, f"Scanning video: {f}", timeout=1)
-            
-            logger.info("Scanning music library...")
+
+            logger.info("Scanning music library (Phase 1)...")
             self.music_lib.scan(progress_cb=on_music_progress)
-            
+
+            logger.info("Enriching music metadata (Phase 2)...")
+            self.call_from_thread(self.notify, "Fetching online metadata...")
+
+            def on_enrich_progress(msg):
+                self.call_from_thread(self.notify, msg, timeout=2)
+
+            self.music_lib.enrich_metadata(progress_cb=on_enrich_progress)
+            self.call_from_thread(self.notify, "Online metadata fetch complete!")
+
             logger.info("Scanning video library...")
             self.video_lib.scan(progress_cb=on_video_progress)
-            
+
             logger.info("Library scan complete!")
             self.call_from_thread(self.notify, "Library scan complete!")
             self.call_from_thread(self._refresh_sidebar)
         except Exception as e:
             logger.exception("Error during library scan")
             self.call_from_thread(self.notify, f"Scan failed: {e}", severity="error")
-
     def _refresh_sidebar(self) -> None:
         try: self.query_one(Sidebar).refresh_tree()
         except Exception: pass
