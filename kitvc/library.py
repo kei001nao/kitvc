@@ -4,6 +4,7 @@ import json
 import mutagen
 import logging
 import hashlib
+from pathlib import Path
 from mutagen.easyid3 import EasyID3
 from mutagen.flac import FLAC
 from mutagen.mp3 import MP3
@@ -18,41 +19,131 @@ AUDIO_EXTENSIONS = {".flac", ".mp3", ".opus", ".ogg", ".m4a", ".aac", ".wav", ".
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v"}
 
 def _extract_cover_art(path: str) -> str | None:
-    """Extract embedded cover art and save to a stable location."""
+    """Extract embedded cover art and save to a stable location based on data hash."""
+    abs_path = os.path.abspath(path)
     try:
-        covers_dir = CONFIG_DIR / "covers"
-        covers_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Use stable hash (MD5) instead of unstable hash()
-        file_hash = hashlib.md5(path.encode()).hexdigest()
-        target = covers_dir / f"{file_hash}.jpg"
-        
-        if target.exists():
-            return str(target)
-
-        audio = mutagen.File(path)
-        if audio is None:
-            return None
-            
+        audio = mutagen.File(abs_path)
         data = None
-        if isinstance(audio, FLAC) and audio.pictures:
-            data = audio.pictures[0].data
-        elif isinstance(audio, MP3):
-            # Check ID3 tags for APIC frame
-            for tag in audio.tags.values():
-                if tag.FrameID == "APIC":
-                    data = tag.data
-                    break
-        elif "covr" in audio: # MP4/M4A
-            data = audio["covr"][0]
+        
+        if audio is not None:
+            if isinstance(audio, FLAC) and audio.pictures:
+                data = audio.pictures[0].data
+                logger.info(f"Extracted embedded FLAC picture from {abs_path}")
+            elif isinstance(audio, MP3) and audio.tags:
+                for tag in audio.tags.values():
+                    if tag.FrameID == "APIC":
+                        data = tag.data
+                        logger.info(f"Extracted embedded MP3 APIC from {abs_path}")
+                        break
+            elif "covr" in audio: # MP4/M4A
+                data = audio["covr"][0]
+                logger.info(f"Extracted embedded MP4 covr from {abs_path}")
+
+        if not data:
+            # Fallback: search for image files in the same directory
+            logger.info(f"No embedded art in {abs_path}, searching directory...")
+            data = _read_folder_art_data(abs_path)
 
         if data:
-            with open(target, "wb") as f:
-                f.write(data)
+            covers_dir = CONFIG_DIR / "covers"
+            covers_dir.mkdir(parents=True, exist_ok=True)
+            
+            data_hash = hashlib.md5(data).hexdigest()
+            target = covers_dir / f"{data_hash}.jpg"
+            
+            if not target.exists():
+                logger.info(f"Saving new cover art ({len(data)} bytes) to: {target}")
+                with open(target, "wb") as f:
+                    f.write(data)
             return str(target)
-    except Exception:
-        pass
+        else:
+            logger.warning(f"No cover art found for {abs_path}")
+            
+    except Exception as e:
+        logger.error(f"Cover extraction failed for {abs_path}: {e}")
     return None
+
+def _read_folder_art_data(abs_path: str) -> bytes | None:
+    """Read an image file found in the same directory (or parent) as the track."""
+    try:
+        track_path = Path(abs_path).resolve()
+        
+        # Priority image extensions
+        extensions = [".jpg", ".jpeg", ".png"]
+        # Priority names (without extension)
+        priority_names = ["cover", "folder", "front", "album", "art"]
+        
+        # Search current directory and parent directory (to handle Album/Track structure)
+        search_dirs = [track_path.parent]
+        # Also check one level up if parent name is just numbers (disc 1, etc) or similar
+        if track_path.parent.parent and track_path.parent.parent != track_path.parent:
+             search_dirs.append(track_path.parent.parent)
+
+        for parent in search_dirs:
+            if not parent.exists(): continue
+            logger.info(f"Searching for images in: {parent}")
+            
+            # Use os.listdir for maximum reliability
+            try:
+                files = os.listdir(parent)
+            except Exception as e:
+                logger.error(f"Failed to list directory {parent}: {e}")
+                continue
+            
+            # 1. Look for priority names (case-insensitive)
+            for name in priority_names:
+                for f in files:
+                    f_path = parent / f
+                    if f_path.is_file():
+                        stem = f_path.stem.lower()
+                        ext = f_path.suffix.lower()
+                        if stem == name and ext in extensions:
+                            logger.info(f"Priority folder art: {f_path} ({f_path.stat().st_size} bytes)")
+                            return f_path.read_bytes()
+            
+            # 2. Look for ANY image file
+            for f in files:
+                f_path = parent / f
+                if f_path.is_file() and f_path.suffix.lower() in extensions:
+                    logger.info(f"Found image file: {f_path} ({f_path.stat().st_size} bytes)")
+                    return f_path.read_bytes()
+                
+    except Exception as e:
+        logger.error(f"Folder art search error in {abs_path}: {e}")
+    return None
+
+def write_music_tags(path: str, tags: dict) -> bool:
+    """
+    Write tags back to the music file.
+    tags can contain: title, artist, date
+    """
+    try:
+        # Use Easy mutagen interface where possible for simplicity
+        audio = mutagen.File(path, easy=True)
+        if audio is None:
+            logger.error(f"Unsupported file format for writing: {path}")
+            return False
+
+        if "title" in tags:
+            audio["title"] = tags["title"]
+        if "artist" in tags:
+            audio["artist"] = tags["artist"]
+        if "date" in tags:
+            # Easy mutagen handles 'date' for ID3 (TDRC), FLAC (DATE), etc.
+            audio["date"] = str(tags["date"])
+
+        audio.save()
+        logger.info(f"Successfully wrote tags to {path}")
+        
+        # Update mtime in DB to prevent immediate re-scan from overwriting
+        # (Though current scanner checks mtime, so we should update it)
+        with get_connection() as conn:
+            conn.execute("UPDATE music_tracks SET mtime = ? WHERE path = ?", (os.path.getmtime(path), path))
+            
+        return True
+    except Exception as e:
+        logger.error(f"Failed to write tags to {path}: {e}")
+        return False
 
 def _read_music_tags(path: str) -> dict | None:
     try:
@@ -165,6 +256,9 @@ class MusicLibrary:
             with get_connection() as conn:
                 cache = {row["path"]: row["mtime"] for row in conn.execute("SELECT path, mtime FROM music_tracks").fetchall()}
 
+            # Keep track of albums scanned in this session to avoid redundant cover extraction
+            scanned_albums = set()
+
             for music_dir in self.directories:
                 if not os.path.isdir(music_dir): continue
                 for root, _, files in os.walk(music_dir):
@@ -175,11 +269,20 @@ class MusicLibrary:
                         
                         mtime = os.path.getmtime(path)
                         if cache.get(path) != mtime:
-                            if progress_cb: progress_cb(fname)
+                            # Do NOT notify every single file to avoid flood
+                            logger.info(f"Scanning: {path}")
                             tags = _read_music_tags(path)
                             if tags:
                                 tags["path"] = path
                                 tags["mtime"] = mtime
+                                
+                                # Optimization: only extract cover once per album during a scan
+                                album_key = (tags["artist"], tags["album"])
+                                if album_key in scanned_albums:
+                                    tags["cover_path"] = None # Will be filled by DB's existing album info
+                                else:
+                                    scanned_albums.add(album_key)
+                                
                                 update_music_track(tags)
 
             remove_missing_files(list(found_paths), "music_tracks")
@@ -193,21 +296,22 @@ class MusicLibrary:
         try:
             with get_connection() as conn:
                 if force:
-                    albums = conn.execute("SELECT id, artist, title, mbid, cover_path FROM music_albums").fetchall()
+                    albums = [dict(row) for row in conn.execute("SELECT id, artist, title, mbid, cover_path FROM music_albums").fetchall()]
                 else:
                     # Target albums with missing MBID or cover
-                    albums = conn.execute(
+                    albums = [dict(row) for row in conn.execute(
                         "SELECT id, artist, title, mbid, cover_path FROM music_albums WHERE mbid IS NULL OR cover_path IS NULL"
-                    ).fetchall()
+                    ).fetchall()]
 
-            for album in albums:
+            total = len(albums)
+            for i, album in enumerate(albums, 1):
                 album_id = album["id"]
                 artist = album["artist"]
                 title = album["title"]
                 mbid = album["mbid"]
                 
                 if progress_cb:
-                    progress_cb(f"Fetching metadata for: {artist} - {title}")
+                    progress_cb(f"Fetching metadata ({i}/{total}): {artist} - {title}")
                 
                 updates = {}
                 
@@ -282,3 +386,51 @@ class VideoLibrary:
                         update_video_file(video_data)
 
         remove_missing_files(list(found_paths), "video_files")
+
+    def enrich_metadata(self, progress_cb: Optional[Callable[[str], None]] = None):
+        """Phase 2: Fetch missing video info from TMDB."""
+        try:
+            with get_connection() as conn:
+                videos = [dict(row) for row in conn.execute(
+                    "SELECT id, path, filename, title, series, season, episode, tmdb_id FROM video_files WHERE synopsis IS NULL"
+                ).fetchall()]
+
+            total = len(videos)
+            for i, video in enumerate(videos, 1):
+                path = video["path"]
+                filename = video["filename"]
+                
+                # Determine search title
+                search_title = video.get("series") or video.get("title")
+                if not search_title:
+                    from .utils import parse_video_filename
+                    meta = parse_video_filename(filename)
+                    search_title = meta.get("series") or meta.get("title")
+                
+                if not search_title:
+                    continue
+
+                is_tv = bool(video.get("series") or video.get("season"))
+                
+                if progress_cb:
+                    progress_cb(f"Fetching TMDB ({i}/{total}): {search_title}")
+                
+                logger.info(f"Searching TMDB for: {search_title} (is_tv={is_tv})")
+                meta = fetch_video_metadata(search_title, is_tv=is_tv)
+                
+                if meta:
+                    updates = {}
+                    for field in ["synopsis", "cast", "director", "year", "poster_path"]:
+                        if meta.get(field):
+                            updates[field] = meta[field]
+                    
+                    if updates:
+                        with get_connection() as conn:
+                            set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+                            params = list(updates.values())
+                            params.append(path)
+                            conn.execute(f"UPDATE video_files SET {set_clause} WHERE path = ?", params)
+                            logger.info(f"Updated metadata for: {path}")
+
+        except Exception as e:
+            logger.exception("VideoLibrary.enrich_metadata failed")

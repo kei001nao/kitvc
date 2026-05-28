@@ -1,13 +1,25 @@
 import asyncio
 import logging
+import os
 from pathlib import Path
 
-# Setup logging
-logging.basicConfig(
-    filename='kitvc.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Explicitly setup logging with FileHandler to ensure it works
+log_path = Path("kitvc.log").absolute()
+notifications_path = Path("notifications.txt").absolute()
+
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+# Clear existing handlers
+for h in root_logger.handlers[:]:
+    root_logger.removeHandler(h)
+
+fh = logging.FileHandler(log_path)
+fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+root_logger.addHandler(fh)
+
+# Suppress noisy logs from MusicBrainz library
+logging.getLogger("musicbrainzngs").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 from textual.app import App, ComposeResult
@@ -27,7 +39,7 @@ from .widgets.modals import QuitModal, ConfirmModal, FileSelectModal
 from .widgets.playback import PlaybackControl
 from .screens.music import MusicLibraryScreen, MusicArtistScreen, MusicPlaylistScreen, QueueScreen
 from .screens.video import VideoLibraryScreen, VideoCategoryScreen, VideoPlaylistScreen
-from .screens.video_queue import VideoQueueScreen
+from textual_image.widget import Image
 
 LOGO = """█▄▀ █ ▀█▀ █ █ █▀
 █ █ █  █  ╚▄▀ █▄""".strip("\n")
@@ -50,6 +62,23 @@ class Sidebar(Widget):
     Sidebar Tree {
         background: transparent;
         padding: 0 1;
+        height: 1fr;
+    }
+    #sidebar-cover-container {
+        width: 100%;
+        height: 18;
+        margin: 1 0;
+        background: $surface;
+        border: solid $primary;
+        display: none;
+        align: center middle;
+    }
+    #sidebar-cover-container.-has-image {
+        display: block;
+    }
+    #sidebar-cover-container Image {
+        width: 100%;
+        height: 100%;
     }
     """
 
@@ -63,11 +92,13 @@ class Sidebar(Widget):
         music.add_leaf("PlayLists", data="music_playlists")
         
         video = tree.root.add("Video", data="video_root", expand=True)
-        video.add_leaf("Queue", data="video_queue")
         video.add("Library", data="video_library")
         video.add_leaf("PlayLists", data="video_playlists")
         
         yield tree
+        with Vertical(id="sidebar-cover-container"):
+            # Placeholder, will be populated dynamically
+            pass
         yield Label(LOGO, id="app-title")
 
     def on_mount(self) -> None:
@@ -128,15 +159,13 @@ class Sidebar(Widget):
         if data == "music_root":
             self.app.switch_screen("music_queue")
         elif data == "video_root":
-            self.app.switch_screen("video_queue")
+            self.app.switch_screen("video")
         elif data == "music_library":
             self.app.switch_screen("music")
         elif data == "video_library":
             self.app.switch_screen("video")
         elif data == "music_queue":
             self.app.switch_screen("music_queue")
-        elif data == "video_queue":
-            self.app.switch_screen("video_queue")
         elif data == "music_playlists":
             self.app.switch_screen("music_playlists")
         elif data == "video_playlists":
@@ -278,13 +307,23 @@ class ContentArea(Widget):
         yield QueueScreen()
 
 class KitvcApp(App):
+    def notify(self, message: str, *, title: str = "", severity: str = "information", timeout: float = 3) -> None:
+        """Override notify to also write to a text file for accessibility/debugging."""
+        super().notify(message, title=title, severity=severity, timeout=timeout)
+        try:
+            with open(notifications_path, "a", encoding="utf-8") as f:
+                f.write(f"[{severity.upper()}] {title + ': ' if title else ''}{message}\n")
+        except Exception:
+            pass
+
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("p", "toggle_pause", "Play/Pause"),
         Binding("escape", "quit", "Quit"),
         Binding("backspace", "go_back", "Back"),
-        Binding("1", "switch_to_queue", "Queue"),
-        Binding("2", "switch_to_playlists", "PlayLists"),
+        Binding("1", "switch_to_queue", "Music Queue", priority=True),
+        Binding("2", "switch_to_playlists", "Music PL", priority=True),
+        Binding("3", "switch_to_video_playlists", "Video PL", priority=True),
         Binding("ctrl+s", "scan", "Scan Lib"),
         Binding("ctrl+o", "import_playlist", "Import M3U"),
         Binding("l", "seek(5)", "Seek +5s", show=False),
@@ -360,6 +399,7 @@ class KitvcApp(App):
             self._current_screen_name = None
             self._current_screen_data = None
             self._theme_mtime = 0.0
+            self._last_sidebar_path = None
             if THEME_PATH.exists():
                 self._theme_mtime = THEME_PATH.stat().st_mtime
         except Exception as e:
@@ -396,7 +436,7 @@ class KitvcApp(App):
         with Horizontal(id="main-layout"):
             yield Sidebar()
             yield ContentArea(id="content")
-        yield Label("  ctrl+q: Quit | p: Play/Pause | ctrl+s: Scan | h/l: Seek | 1: Queue | 2: PlayLists | ctrl+o: Import M3U", id="footer")
+        yield Label("  ctrl+q: Quit | p: Play/Pause | ctrl+s: Scan | 1-3: Nav | h/l: Seek | ctrl+o: Import M3U", id="footer")
 
     async def on_mount(self) -> None:
         logger.info("Mounting KitvcApp")
@@ -412,6 +452,30 @@ class KitvcApp(App):
         except Exception as e:
             logger.exception("Error during KitvcApp.on_mount")
             self.notify(f"Startup error: {e}", severity="error")
+
+    def update_sidebar_cover(self, path: str | None) -> None:
+        """Update the cover art displayed in the sidebar by recreating the widget."""
+        # Optimization: only update if the path has changed
+        if hasattr(self, "_last_sidebar_path") and self._last_sidebar_path == path:
+            return
+        self._last_sidebar_path = path
+
+        try:
+            container = self.query_one("#sidebar-cover-container", Vertical)
+            
+            # Remove old images
+            for child in list(container.children):
+                child.remove()
+            
+            if path and Path(path).exists():
+                new_img = Image(path)
+                container.mount(new_img)
+                container.set_class(True, "-has-image")
+                logger.info(f"Sidebar cover re-mounted: {path}")
+            else:
+                container.set_class(False, "-has-image")
+        except Exception as e:
+            logger.debug(f"Failed to update sidebar cover: {e}")
 
     async def _poll_player(self) -> None:
         header = self.query_one("#header", Header)
@@ -432,18 +496,30 @@ class KitvcApp(App):
         
         track = active_player.get_current_track()
         if pos is not None and dur is not None and track:
-            # For music, we need to ensure we have album info (joined from music_albums if needed)
-            if not track.get("is_video") and "cover_path" not in track:
+            # 1. Ensure we have the latest metadata (including cover_path) from DB
+            if not track.get("is_video"):
                 with get_connection() as conn:
-                    # Refresh metadata from DB (in case it was updated by scan)
                     row = conn.execute("""
-                        SELECT t.*, a.cover_path, a.release_date, a.mbid, a.comment as album_comment
+                        SELECT t.*, a.cover_path as album_cover, a.release_date, a.mbid
                         FROM music_tracks t
                         LEFT JOIN music_albums a ON t.album_id = a.id
                         WHERE t.path = ?
                     """, (track["path"],)).fetchone()
                     if row:
-                        track.update(dict(row))
+                        db_data = dict(row)
+                        # Always prefer album cover if available
+                        if db_data.get("album_cover"):
+                            track["cover_path"] = db_data["album_cover"]
+                        elif db_data.get("cover_path"):
+                             track["cover_path"] = db_data["cover_path"]
+                             
+                        if db_data.get("mbid"): track["mbid"] = db_data["mbid"]
+
+            # 2. Update sidebar cover ONLY if it's music and not currently seeking
+            if not track.get("is_video"):
+                current_cover = track.get("cover_path")
+                # Force update if active_player._current_idx changed or path is new
+                self.update_sidebar_cover(current_cover)
 
             self._current_media = track
             title = track.get("title") or track.get("filename")
@@ -527,23 +603,34 @@ class KitvcApp(App):
     def scan_libraries(self, loop: asyncio.AbstractEventLoop) -> None:
         logger.info("Starting library scan")
         try:
-            def on_music_progress(f): self.call_from_thread(self.notify, f"Scanning music: {f}", timeout=1)
-            def on_video_progress(f): self.call_from_thread(self.notify, f"Scanning video: {f}", timeout=1)
+            # Phase 1: Fast scan (No UI notification per file to avoid flood)
+            self.call_from_thread(self.notify, "Scanning local files...")
+            self.music_lib.scan()
 
-            logger.info("Scanning music library (Phase 1)...")
-            self.music_lib.scan(progress_cb=on_music_progress)
-
+            # Phase 2: Metadata enrichment
             logger.info("Enriching music metadata (Phase 2)...")
-            self.call_from_thread(self.notify, "Fetching online metadata...")
+
+            # Counter for throttling notifications
+            self._enrich_count = 0
 
             def on_enrich_progress(msg):
-                self.call_from_thread(self.notify, msg, timeout=2)
+                self._enrich_count += 1
+                # Only notify every 5 items to avoid UI flood
+                if self._enrich_count % 5 == 1 or "Enriching" in msg:
+                    self.call_from_thread(self.notify, msg, timeout=3)
 
             self.music_lib.enrich_metadata(progress_cb=on_enrich_progress)
-            self.call_from_thread(self.notify, "Online metadata fetch complete!")
+            self.call_from_thread(self.notify, "Online metadata fetch complete!", severity="information")
+            
+            # Refresh UI to show newly found covers/metadata
+            self.call_from_thread(self._refresh_current_screen)
 
-            logger.info("Scanning video library...")
-            self.video_lib.scan(progress_cb=on_video_progress)
+            # Video Scan
+            self.call_from_thread(self.notify, "Scanning video library...")
+            self.video_lib.scan()
+            
+            # Phase 2 Video: Metadata enrichment
+            self.video_lib.enrich_metadata(progress_cb=on_enrich_progress)
 
             logger.info("Library scan complete!")
             self.call_from_thread(self.notify, "Library scan complete!")
@@ -551,9 +638,33 @@ class KitvcApp(App):
         except Exception as e:
             logger.exception("Error during library scan")
             self.call_from_thread(self.notify, f"Scan failed: {e}", severity="error")
+
     def _refresh_sidebar(self) -> None:
         try: self.query_one(Sidebar).refresh_tree()
         except Exception: pass
+
+    def _refresh_current_screen(self) -> None:
+        """Refresh the currently active screen if it supports reloading."""
+        try:
+            # If we are on MusicArtistScreen, it has _load_albums
+            # Note: self.screen might be a screen or a specific widget depending on push_view
+            # Let's check the focused screen and its children
+            current = self.screen
+            if hasattr(current, "_load_albums"):
+                current._load_albums()
+            elif hasattr(current, "reload_playlists"):
+                current.reload_playlists()
+                
+            # Also check if it's within our ContentArea
+            try:
+                content = self.query_one("#content")
+                for child in content.children:
+                    if hasattr(child, "_load_albums"):
+                        child._load_albums()
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"UI Refresh failed: {e}")
 
     async def push_view(self, widget: Widget) -> None:
         content = self.query_one("#content", ContentArea)
@@ -592,7 +703,6 @@ class KitvcApp(App):
             self._current_screen_data = data
             if name == "music": new_screen = MusicLibraryScreen()
             elif name == "video": new_screen = VideoLibraryScreen()
-            elif name == "video_queue": new_screen = VideoQueueScreen()
             elif name in ("queue", "music_queue"): new_screen = QueueScreen()
             elif name == "artist": new_screen = MusicArtistScreen(data)
             elif name == "music_playlists": new_screen = MusicPlaylistScreen()
@@ -653,12 +763,12 @@ class KitvcApp(App):
             await asyncio.sleep(0.5)
             await self.music_player.seek(pos)
 
-    def play_video(self, video: dict, videos: list[dict] = None, idx: int = 0) -> None:
+    def play_video(self, video: dict, videos: list[dict] = None, idx: int = 0, resume: bool = True) -> None:
         if videos:
             for v in videos: v["is_video"] = True
         else: video["is_video"] = True
         self._current_media = video
-        resume_pos = get_playback_position(video["path"], is_video=True)
+        resume_pos = get_playback_position(video["path"], is_video=True) if resume else 0
         asyncio.create_task(self._play_video_with_resume(videos or [video], idx, resume_pos))
 
     async def _play_video_with_resume(self, items, idx, pos):
@@ -709,17 +819,26 @@ class KitvcApp(App):
 
     def action_quit(self) -> None: self.push_screen(QuitModal())
 
-    def action_switch_to_queue(self) -> None:
-        name = "video_queue" if (self.video_player.mpv and self.video_player.get_current_track()) else "music_queue"
-        self.switch_screen(name, focus_right=True)
-        try: self.query_one(Sidebar).select_node_by_data(name)
+    def action_switch_to_music_queue(self) -> None:
+        self.switch_screen("music_queue", focus_right=True)
+        try: self.query_one(Sidebar).select_node_by_data("music_queue")
         except Exception: pass
 
-    def action_switch_to_playlists(self) -> None:
-        name = "video_playlists" if (self.video_player.mpv and self.video_player.get_current_track()) else "music_playlists"
-        self.switch_screen(name, focus_right=True)
-        try: self.query_one(Sidebar).select_node_by_data(name)
+    def action_switch_to_music_playlists(self) -> None:
+        self.switch_screen("music_playlists", focus_right=True)
+        try: self.query_one(Sidebar).select_node_by_data("music_playlists")
         except Exception: pass
+
+    def action_switch_to_video_playlists(self) -> None:
+        self.switch_screen("video_playlists", focus_right=True)
+        try: self.query_one(Sidebar).select_node_by_data("video_playlists")
+        except Exception: pass
+
+    def action_switch_to_queue(self) -> None:
+        self.action_switch_to_music_queue()
+
+    def action_switch_to_playlists(self) -> None:
+        self.action_switch_to_music_playlists()
 
     def action_import_playlist(self) -> None:
         is_video = (self.video_player.mpv and self.video_player.get_current_track())
@@ -733,6 +852,7 @@ class KitvcApp(App):
         if m3u_path: asyncio.create_task(self._do_import_m3u(m3u_path))
 
     async def _do_import_m3u(self, m3u_path: str) -> None:
+        path = Path(m3u_path)
         path = Path(m3u_path)
         name = path.stem
         is_video = (self.video_player.mpv and self.video_player.get_current_track())

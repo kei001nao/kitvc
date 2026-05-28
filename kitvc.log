@@ -1,0 +1,238 @@
+2026-05-25 23:04:33,558 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-25 23:08:04,228 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-25 23:14:56,015 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-26 21:55:32,520 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-27 20:54:39,437 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-27 21:49:17,136 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-27 22:03:14,635 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-27 22:11:43,423 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-27 22:19:06,468 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-28 21:14:09,244 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-28 21:37:44,510 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-28 21:38:42,120 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-28 21:45:37,369 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-28 21:55:26,732 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-28 22:00:16,422 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-28 22:10:48,659 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data
+2026-05-28 22:14:32,826 - WARNING - Failed to get cell size via escape sequence, assuming VT340 sizes
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 65, in get_cell_size
+    with capture_terminal_response("\x1b[", "t", 0.1) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_terminal.py", line 128, in capture_terminal_response
+    response.sequence += read(stdin, 1, timeout)
+                         ~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/textual_image/_posix.py", line 34, in read
+    raise TimeoutError("Timeout waiting for data")
+TimeoutError: Timeout waiting for data

@@ -6,6 +6,7 @@ from textual.containers import Vertical
 from ..database import get_connection
 from ..widgets.media_lists import TrackList
 import asyncio
+from pathlib import Path
 
 class MusicLibraryScreen(Widget):
     DEFAULT_CSS = """
@@ -73,17 +74,14 @@ class MusicArtistScreen(Widget):
         yield Label(self._artist_name, id="music-artist-heading")
         yield Label("Albums")
         yield Label("q: Add Album to Queue  |  a: Add Album to Playlist  |  Enter: Select", classes="playlist-help")
-        yield DataTable(id="music-albums", cursor_type="row")
+        yield DataTable(id="music-albums", cursor_type="row", zebra_stripes=True)
         yield Label("Tracks")
         yield Label("m/Space: Mark  |  a: Add to Playlist  |  q: Add to Queue  |  Enter: Play", classes="playlist-help")
         yield TrackList(id="music-tracks")
 
     def on_mount(self) -> None:
         table = self.query_one("#music-albums", DataTable)
-        table.fixed_columns = 1
         table.styles.height = 11  # Ensure height is set
-        table.fixed_row_height = 3 # Use fixed_row_height attribute
-        table.add_column("Art", key="art", width=5)
         table.add_column("Date", key="release_date", width=12)
         table.add_column("Album", key="album")
         self._load_albums()
@@ -93,7 +91,7 @@ class MusicArtistScreen(Widget):
         with get_connection() as conn:
             # Query the music_albums table directly
             albums = [dict(row) for row in conn.execute(
-                "SELECT title as album, release_date, cover_path FROM music_albums WHERE artist = ? ORDER BY release_date DESC, title", 
+                "SELECT id, title as album, release_date, cover_path FROM music_albums WHERE artist = ? ORDER BY release_date DESC, title", 
                 (self._artist_name,)
             ).fetchall()]
         self.app.call_from_thread(self._populate_albums, albums)
@@ -103,16 +101,22 @@ class MusicArtistScreen(Widget):
         table = self.query_one("#music-albums", DataTable)
         table.clear()
         self._current_album_idx = -1
+        
+        if not albums:
+            # Clear tracks if no albums
+            self.query_one(TrackList).load([])
+            self.app.update_sidebar_cover(None)
+            return
+
         for i, album in enumerate(albums):
             date_str = album['release_date'] or ""
-            # Character based art preview placeholder (5x3 box if we had image widget support in cell)
-            # For now, use a visual mark [▣] or similar if cover exists
-            art_mark = " [▣]" if album.get("cover_path") else " [ ]"
-            table.add_row(art_mark, date_str, album['album'], key=str(i))
+            table.add_row(date_str, album['album'], key=str(i))
         if albums:
+            table.move_cursor(row=0)
             self._current_album_idx = 0
             self._load_tracks(albums[0]['album'])
-            table.move_cursor(row=0)
+            if albums[0].get("cover_path"):
+                self.app.update_sidebar_cover(albums[0]["cover_path"])
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         try:
@@ -120,13 +124,23 @@ class MusicArtistScreen(Widget):
             if event.control.id != "music-albums":
                 return
 
+            if event.row_key is None:
+                return
+
             idx = int(str(event.row_key.value))
             if getattr(self, "_current_album_idx", -1) == idx:
                 return
             
             self._current_album_idx = idx
-            album_name = self._albums_list[idx]['album']
-            self._load_tracks(album_name)
+            album = self._albums_list[idx]
+            self._load_tracks(album['album'])
+            
+            # Update sidebar cover on highlight
+            if album.get("cover_path"):
+                self.app.update_sidebar_cover(album["cover_path"])
+            else:
+                self.app.update_sidebar_cover(None)
+                
         except (ValueError, IndexError):
             pass
 
@@ -162,7 +176,7 @@ class MusicArtistScreen(Widget):
         with get_connection() as conn:
             tracks = [dict(row) for row in conn.execute(
                 """
-                SELECT t.*, a.release_date, a.cover_path, a.mbid, a.comment as album_comment
+                SELECT t.*, a.cover_path as album_cover, a.release_date, a.mbid, a.comment as album_comment
                 FROM music_tracks t
                 LEFT JOIN music_albums a ON t.album_id = a.id
                 WHERE t.artist = ? AND t.album = ? 
@@ -170,8 +184,67 @@ class MusicArtistScreen(Widget):
                 """,
                 (self._artist_name, album_name)
             ).fetchall()]
+        
+        for t in tracks:
+            if t.get("album_cover"):
+                t["cover_path"] = t["album_cover"]
+                
         self._current_album_tracks = tracks
         self.app.call_from_thread(self.query_one(TrackList).load, tracks)
+
+    def on_key(self, event) -> None:
+        if event.key == "ctrl+e":
+            table = self.query_one("#music-albums", DataTable)
+            if table.has_focus and table.cursor_row is not None:
+                try:
+                    idx = int(str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value))
+                    album = self._albums_list[idx]
+                    # Pass the artist name to the modal
+                    album_data = dict(album)
+                    album_data["artist"] = self._artist_name
+                    from .music import MusicAlbumEditModal
+                    self.app.push_screen(MusicAlbumEditModal(album_data), callback=self._on_album_edit_finished)
+                except Exception:
+                    pass
+            event.stop()
+        elif event.key == "q":
+            table = self.query_one("#music-albums", DataTable)
+            if table.has_focus and table.cursor_row is not None:
+                try:
+                    idx = int(str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value))
+                    album_name = self._albums_list[idx]['album']
+                    self._add_album_to_queue(album_name)
+                except Exception:
+                    pass
+    def _on_album_edit_finished(self, result: bool) -> None:
+        if result:
+            # Re-check if this artist still has albums (they might have been renamed)
+            with get_connection() as conn:
+                exists = conn.execute("SELECT 1 FROM music_albums WHERE artist = ?", (self._artist_name,)).fetchone()
+            
+            if not exists:
+                # If renamed or no albums, this screen is no longer valid, go back
+                self.app.action_go_back()
+                self.app.notify("Artist metadata changed, returning to library")
+            else:
+                self._load_albums()
+
+            try:
+                from ..app import Sidebar
+                self.app.query_one(Sidebar).refresh_tree()
+            except Exception:
+                pass
+
+    def on_track_list_track_edit_requested(self, event: TrackList.TrackEditRequested) -> None:
+        from .music import MusicTrackEditModal
+        self.app.push_screen(MusicTrackEditModal(event.track), callback=self._on_track_edit_finished)
+
+    def _on_track_edit_finished(self, result: bool) -> None:
+        if result:
+            # Force reload the tracks for the currently selected album
+            if self._current_album_idx != -1:
+                album_name = self._albums_list[self._current_album_idx]['album']
+                self._load_tracks(album_name)
 
 class MusicPlaylistScreen(Widget):
     DEFAULT_CSS = """
@@ -348,6 +421,168 @@ class MusicPlaylistScreen(Widget):
     def on_track_list_track_selected(self, event: TrackList.TrackSelected) -> None:
         # Disable Enter to play in playlist screen
         pass
+
+    def on_track_list_track_edit_requested(self, event: TrackList.TrackEditRequested) -> None:
+        from .music import MusicTrackEditModal
+        self.app.push_screen(MusicTrackEditModal(event.track), callback=self._on_track_edit_finished)
+
+    def _on_track_edit_finished(self, result: bool) -> None:
+        if result:
+            self._load_playlist_tracks(self._current_playlist_id, self._current_playlist_name)
+
+class MusicAlbumEditModal(Widget): # Using Widget to be contained within Screen or used as one
+    # But user asked for Screen-like modal, so let's use Screen
+    pass
+
+from textual.screen import Screen
+from textual.widgets import Input
+
+class MusicAlbumEditModal(Screen):
+    DEFAULT_CSS = """
+    MusicAlbumEditModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.5);
+    }
+    #music-album-edit-container {
+        width: 50;
+        height: auto;
+        border: panel $primary;
+        background: $surface;
+        padding: 0 1;
+    }
+    #music-album-edit-container Label { text-style: bold; margin-top: 1; height: 1; }
+    #music-album-edit-container Input { margin-bottom: 0; border: none; background: $accent 10%; color: $text; padding: 0 1; height: 1; }
+    .edit-help { width: 100%; text-align: center; background: $primary; color: $text; margin-top: 1; height: 1; }
+    """
+
+    def __init__(self, album: dict, **kwargs):
+        super().__init__(**kwargs)
+        self.album = album
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="music-album-edit-container"):
+            yield Label(f"Edit Album: {self.album['album']}")
+            yield Label("Artist Name")
+            yield Input(value=self.album.get("artist") or "", id="edit-artist")
+            yield Label("Release Date")
+            yield Input(value=self.album.get("release_date") or "", id="edit-date")
+            yield Label("Enter: Save   ESC: Cancel", classes="edit-help")
+
+    def on_mount(self) -> None:
+        self.query_one("#edit-artist").focus()
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(False)
+            event.stop()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._save_task()
+
+    @work(thread=True)
+    def _save_task(self) -> None:
+        new_artist = self.query_one("#edit-artist", Input).value.strip()
+        new_date = self.query_one("#edit-date", Input).value.strip()
+        
+        if not new_artist:
+            self.app.call_from_thread(self.app.notify, "Artist name cannot be empty", severity="error")
+            return
+
+        try:
+            from ..database import update_music_album_metadata, get_connection
+            from ..library import write_music_tags
+            
+            # 1. Update DB (Atomic)
+            update_music_album_metadata(self.album["id"], new_artist, new_date)
+            
+            # 2. Update Files
+            failed_files = []
+            with get_connection() as conn:
+                tracks = conn.execute("SELECT path FROM music_tracks WHERE album_id = ?", (self.album["id"],)).fetchall()
+                for row in tracks:
+                    path = row["path"]
+                    if not write_music_tags(path, {"artist": new_artist, "date": new_date}):
+                        failed_files.append(Path(path).name)
+            
+            if failed_files:
+                self.app.call_from_thread(self.app.notify, f"Updated DB, but failed to write tags to {len(failed_files)} files", severity="warning")
+            else:
+                self.app.call_from_thread(self.app.notify, "Album metadata and file tags updated")
+            
+            self.app.call_from_thread(self.dismiss, True)
+        except Exception as e:
+            self.app.call_from_thread(self.app.notify, f"Error: {e}", severity="error")
+
+class MusicTrackEditModal(Screen):
+    DEFAULT_CSS = """
+    MusicTrackEditModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.5);
+    }
+    #music-track-edit-container {
+        width: 50;
+        height: auto;
+        border: panel $primary;
+        background: $surface;
+        padding: 0 1;
+    }
+    #music-track-edit-container Label { text-style: bold; margin-top: 1; height: 1; }
+    #music-track-edit-container Input { margin-bottom: 0; border: none; background: $accent 10%; color: $text; padding: 0 1; height: 1; }
+    .edit-help { width: 100%; text-align: center; background: $primary; color: $text; margin-top: 1; height: 1; }
+    """
+
+    def __init__(self, track: dict, **kwargs):
+        super().__init__(**kwargs)
+        self.track = track
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="music-track-edit-container"):
+            yield Label(f"Edit Track: {Path(self.track['path']).name}")
+            yield Label("Track Title")
+            yield Input(value=self.track.get("title") or "", id="edit-title")
+            yield Label("Artist")
+            yield Input(value=self.track.get("artist") or "", id="edit-artist")
+            yield Label("Album")
+            yield Input(value=self.track.get("album") or "", id="edit-album")
+            yield Label("Enter: Save   ESC: Cancel", classes="edit-help")
+
+    def on_mount(self) -> None:
+        self.query_one("#edit-title").focus()
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(False)
+            event.stop()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._save_task()
+
+    @work(thread=True)
+    def _save_task(self) -> None:
+        new_title = self.query_one("#edit-title", Input).value.strip()
+        new_artist = self.query_one("#edit-artist", Input).value.strip()
+        new_album = self.query_one("#edit-album", Input).value.strip()
+        
+        if not new_title:
+            self.app.call_from_thread(self.app.notify, "Track title cannot be empty", severity="error")
+            return
+
+        try:
+            from ..database import update_music_track_metadata
+            from ..library import write_music_tags
+            
+            # 1. Update DB
+            update_music_track_metadata(self.track["path"], new_title, new_artist, new_album)
+            
+            # 2. Update File
+            if write_music_tags(self.track["path"], {"title": new_title, "artist": new_artist}):
+                self.app.call_from_thread(self.app.notify, "Track metadata and file tags updated")
+            else:
+                self.app.call_from_thread(self.app.notify, "Updated DB, but failed to write tags to file", severity="warning")
+                
+            self.app.call_from_thread(self.dismiss, True)
+        except Exception as e:
+            self.app.call_from_thread(self.app.notify, f"Error: {e}", severity="error")
 
 class QueueScreen(Static):
     DEFAULT_CSS = """

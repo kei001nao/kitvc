@@ -22,6 +22,17 @@ class VideoLibraryScreen(Widget):
 
     def on_mount(self) -> None:
         self._load()
+        self.set_interval(0.5, self._update_playback_status)
+
+    def _update_playback_status(self) -> None:
+        try:
+            vl = self.query_one("#video-list", VideoList)
+            track = self.app.video_player.get_current_track()
+            path = track["path"] if track else None
+            is_paused = self.app.video_player._paused
+            vl.set_current_index_by_path(path, is_paused)
+        except Exception:
+            pass
 
     @work(thread=True)
     def _load(self) -> None:
@@ -31,10 +42,32 @@ class VideoLibraryScreen(Widget):
 
     def _populate(self, videos: list[dict]) -> None:
         self.query_one("#video-status", Label).update(f"[dim]{len(videos)} videos[/dim]")
-        self.query_one(VideoList).load(videos)
+        self.query_one("#video-list", VideoList).load(videos)
 
     def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
-        self.app.play_video(event.video, event.videos, event.index)
+        self.app.play_video(event.video, event.videos, event.index, resume=False)
+
+    def on_key(self, event) -> None:
+        if event.key == "p":
+            vl = self.query_one("#video-list", VideoList)
+            from textual.widgets import DataTable
+            try:
+                table = vl.query_one(DataTable)
+                if table.cursor_row is not None:
+                    row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+                    idx = int(str(row_key.value))
+                    video = vl._videos[idx]
+                    
+                    # If this video is already the current track, let global toggle_pause handle it
+                    curr = self.app.video_player.get_current_track()
+                    if curr and curr["path"] == video["path"] and self.app.video_player.mpv:
+                        return
+                    
+                    self.app.play_video(video, vl._videos, idx, resume=True)
+                    event.stop()
+                    return
+            except Exception:
+                pass
 
     def on_video_list_video_edit_requested(self, event: VideoList.VideoEditRequested) -> None:
         self.app.push_screen(VideoEditModal(event.video), callback=self._on_edit_finished)
@@ -65,6 +98,17 @@ class VideoCategoryScreen(Widget):
 
     def on_mount(self) -> None:
         self._load()
+        self.set_interval(0.5, self._update_playback_status)
+
+    def _update_playback_status(self) -> None:
+        try:
+            vl = self.query_one("#video-list", VideoList)
+            track = self.app.video_player.get_current_track()
+            path = track["path"] if track else None
+            is_paused = self.app.video_player._paused
+            vl.set_current_index_by_path(path, is_paused)
+        except Exception:
+            pass
 
     @work(thread=True)
     def _load(self) -> None:
@@ -97,7 +141,29 @@ class VideoCategoryScreen(Widget):
         self.query_one(VideoList).load(videos)
 
     def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
-        self.app.play_video(event.video, event.videos, event.index)
+        self.app.play_video(event.video, event.videos, event.index, resume=False)
+
+    def on_key(self, event) -> None:
+        if event.key == "p":
+            vl = self.query_one("#video-list", VideoList)
+            from textual.widgets import DataTable
+            try:
+                table = vl.query_one(DataTable)
+                if table.cursor_row is not None:
+                    row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+                    idx = int(str(row_key.value))
+                    video = vl._videos[idx]
+
+                    # If this video is already the current track, let global toggle_pause handle it
+                    curr = self.app.video_player.get_current_track()
+                    if curr and curr["path"] == video["path"] and self.app.video_player.mpv:
+                        return
+
+                    self.app.play_video(video, vl._videos, idx, resume=True)
+                    event.stop()
+                    return
+            except Exception:
+                pass
 
     def on_video_list_video_edit_requested(self, event: VideoList.VideoEditRequested) -> None:
         self.app.push_screen(VideoEditModal(event.video), callback=self._on_edit_finished)
@@ -141,6 +207,17 @@ class VideoPlaylistScreen(Widget):
         table = self.query_one("#video-playlist-selector", DataTable)
         table.add_column("Playlist Name", key="name")
         self.reload_playlists()
+        self.set_interval(0.5, self._update_playback_status)
+
+    def _update_playback_status(self) -> None:
+        try:
+            vl = self.query_one("#video-playlist-tracks", VideoList)
+            track = self.app.video_player.get_current_track()
+            path = track["path"] if track else None
+            is_paused = self.app.video_player._paused
+            vl.set_current_index_by_path(path, is_paused)
+        except Exception:
+            pass
 
     def reload_playlists(self) -> None:
         from ..database import get_playlists
@@ -235,7 +312,25 @@ class VideoPlaylistScreen(Widget):
                     self.app.notify(f"Added all videos from playlist to queue")
                 event.stop()
         
-        elif vl_focused:
+        elif vl_focused or event.key == "p":
+            if event.key == "p":
+                try:
+                    if table_videos.cursor_row is not None:
+                        row_key = table_videos.coordinate_to_cell_key(table_videos.cursor_coordinate).row_key
+                        idx = int(str(row_key.value))
+                        video = vl._videos[idx]
+                        
+                        # If this video is already the current track, let global toggle_pause handle it
+                        curr = self.app.video_player.get_current_track()
+                        if curr and curr["path"] == video["path"] and self.app.video_player.mpv:
+                            return
+                        
+                        self.app.play_video(video, vl._videos, idx, resume=True)
+                        event.stop()
+                except Exception:
+                    pass
+                return
+
             if event.key == "q":
                 self.app.video_player.add_to_queue(vl._videos)
                 self.app.notify(f"Added {len(vl._videos)} videos to queue")
@@ -283,8 +378,7 @@ class VideoPlaylistScreen(Widget):
             self.app.query_one("Sidebar").refresh_tree()
 
     def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
-        # Disable Enter to play in playlist screen
-        pass
+        self.app.play_video(event.video, event.videos, event.index, resume=False)
 
 import unicodedata
 
@@ -353,6 +447,17 @@ class VideoEditModal(Screen):
     #edit-type { width: 22; }
     #edit-season, #edit-episode { width: 6; }
 
+    #edit-synopsis-text {
+        height: auto;
+        min-height: 2;
+        max-height: 8;
+        background: $accent 5%;
+        padding: 0 1;
+        margin-bottom: 1;
+        color: $text-muted;
+        text-style: italic;
+    }
+
     #edit-container Horizontal {
         margin-top: 0;
         height: auto;
@@ -388,10 +493,17 @@ class VideoEditModal(Screen):
         with Vertical(id="edit-container"):
             yield Label(f"Editing: {self.video['filename']}", id="edit-filename")
             with Vertical(id="edit-scroll"):
-                if self.video.get("thumbnail_path"):
+                poster = self.video.get("poster_path")
+                thumb = self.video.get("thumbnail_path")
+                display_img = poster if poster else thumb
+                
+                if display_img:
                     from pathlib import Path
-                    if Path(self.video["thumbnail_path"]).exists():
-                        yield Image(self.video["thumbnail_path"])
+                    # Image widget handles URLs too
+                    yield Image(display_img)
+                
+                yield Label("Synopsis")
+                yield Label(self.video.get("synopsis") or "(No synopsis available)", id="edit-synopsis-text")
                 
                 yield Label("Title")
                 yield Input(value=self.video.get("title") or "", id="edit-title")
@@ -439,4 +551,5 @@ class VideoEditModal(Screen):
             self.dismiss(True)
         except ValueError:
             self.app.notify("Invalid number for Season/Episode", severity="error")
+
 

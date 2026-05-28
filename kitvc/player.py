@@ -353,7 +353,15 @@ class VideoPlayer:
         self.on_track_end: list[Callable] = []
 
     async def _ensure_mpv(self) -> None:
-        if not self.mpv:
+        # Check if mpv exists and process is still running
+        is_healthy = False
+        if self.mpv and self.mpv._process:
+            if self.mpv._process.returncode is None:
+                is_healthy = True
+        
+        if not is_healthy:
+            if self.mpv:
+                await self.mpv.shutdown()
             self.mpv = MpvInstance(VIDEO_SOCKET, self.config.get("player", {}).get("mpv_args", []))
             self.mpv.on_event.append(self._handle_event)
             await self.mpv.start()
@@ -376,6 +384,9 @@ class VideoPlayer:
                     else:
                         cb()
                 asyncio.create_task(self.next())
+            elif reason in ("quit", "stop"):
+                self._current_idx = -1
+                self._paused = False
 
     async def play(self, url: str) -> None:
         await self._ensure_mpv()

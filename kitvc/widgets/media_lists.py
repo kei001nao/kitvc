@@ -17,6 +17,11 @@ class TrackList(Widget):
             self.index = index
             self.tracks = tracks
 
+    class TrackEditRequested(Message):
+        def __init__(self, track) -> None:
+            super().__init__()
+            self.track = track
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._tracks = []
@@ -68,16 +73,7 @@ class TrackList(Widget):
                 pass
 
     def load(self, tracks: list) -> None:
-        # Check if data is actually different to avoid unnecessary clear() and cursor reset
-        new_paths = [t.get("path") for t in tracks]
-        # We need a COPY of the list for comparison if it's the same object being modified
-        old_paths = getattr(self, "_last_paths", [])
-        
-        if new_paths == old_paths and self._tracks:
-            return
-
         self._tracks = tracks
-        self._last_paths = list(new_paths) # Store a copy of path list
         self._marked_indices.clear()
         self._current_index = -1
         self._last_is_paused = False
@@ -151,6 +147,15 @@ class TrackList(Widget):
             if tracks:
                 self.app.show_playlist_add_dialog([t["path"] for t in tracks])
             event.stop()
+        elif event.key == "ctrl+e":
+            if table.cursor_row is not None:
+                try:
+                    row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+                    idx = int(str(row_key.value))
+                    self.post_message(self.TrackEditRequested(self._tracks[idx]))
+                except Exception:
+                    pass
+            event.stop()
         elif event.key == "q":
             from ..screens.music import QueueScreen
             parent = self.parent
@@ -208,6 +213,38 @@ class VideoList(Widget):
         if self._videos:
             self.load(self._videos)
 
+    def set_current_index_by_path(self, path: str | None, is_paused: bool = False) -> None:
+        target_idx = -1
+        if path:
+            norm_path = os.path.normpath(path)
+            for i, v in enumerate(self._videos):
+                if os.path.normpath(v["path"]) == norm_path:
+                    target_idx = i
+                    break
+        
+        if self._current_index == target_idx and getattr(self, "_last_is_paused", None) == is_paused:
+            return
+
+        table = self.query_one(DataTable)
+        if self._current_index != -1 and self._current_index < len(self._videos):
+            try:
+                row_key = str(self._current_index)
+                mark = "●" if self._current_index in self._marked_indices else " "
+                table.update_cell(row_key, "mark", mark)
+            except Exception:
+                pass
+        
+        self._current_index = target_idx
+        self._last_is_paused = is_paused
+        
+        if self._current_index != -1 and self._current_index < len(self._videos):
+            try:
+                row_key = str(self._current_index)
+                mark = "■" if is_paused else "▶"
+                table.update_cell(row_key, "mark", mark)
+            except Exception:
+                pass
+
     def set_current_index(self, index: int, is_paused: bool = False) -> None:
         if self._current_index == index and getattr(self, "_last_is_paused", None) == is_paused:
             return
@@ -233,14 +270,7 @@ class VideoList(Widget):
                 pass
 
     def load(self, videos: list) -> None:
-        # Check if data is actually different
-        new_paths = [v.get("path") for v in videos]
-        old_paths = getattr(self, "_last_paths", [])
-        if new_paths == old_paths and self._videos:
-            return
-
         self._videos = videos
-        self._last_paths = list(new_paths)
         self._marked_indices.clear()
         self._current_index = -1
         self._last_is_paused = False
@@ -312,6 +342,11 @@ class VideoList(Widget):
                 row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
                 idx = int(str(row_key.value))
                 self.post_message(self.VideoEditRequested(self._videos[idx]))
+            event.stop()
+        elif event.key == "a":
+            videos = self.get_marked_videos()
+            if videos:
+                self.app.show_playlist_add_dialog([v["path"] for v in videos], is_video=True)
             event.stop()
         elif event.key == "q":
             videos = self.get_marked_videos()

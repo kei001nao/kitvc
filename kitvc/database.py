@@ -209,20 +209,22 @@ def get_playlist_items(playlist_id, is_video=False):
             query = f"SELECT d.* FROM {d_table} d JOIN {i_table} i ON d.path = i.{col} WHERE i.playlist_id = ? ORDER BY i.sort_order"
         else:
             query = f"""
-                SELECT d.*, a.release_date, a.cover_path, a.mbid, a.comment as album_comment 
+                SELECT d.*, a.cover_path as album_cover, a.release_date, a.mbid, a.comment as album_comment
                 FROM {d_table} d
                 LEFT JOIN music_albums a ON d.album_id = a.id
                 JOIN {i_table} i ON d.path = i.{col}
-                WHERE i.playlist_id = ? 
+                WHERE i.playlist_id = ?
                 ORDER BY i.sort_order
             """
-        
+
         items = [dict(row) for row in conn.execute(query, (playlist_id,)).fetchall()]
-        
+
         for item in items:
             item["is_video"] = is_video
+            # Use album cover if track cover is missing
+            if not is_video and item.get("album_cover"):
+                item["cover_path"] = item["album_cover"]
         return items
-
 def get_playlist_tracks(playlist_id):
     # Compatibility wrapper for existing music logic
     return get_playlist_items(playlist_id, is_video=False)
@@ -246,21 +248,28 @@ def update_music_track(track_data):
             (track_data["artist"], track_data["album"])
         ).fetchone()
 
+        # Prepare release date from year if present
+        local_release_date = str(track_data["year"]) if track_data.get("year") else None
+
         if not existing_album:
             cursor = conn.execute("""
                 INSERT INTO music_albums (artist, title, release_date, cover_path, mbid, comment)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 track_data["artist"], track_data["album"],
-                track_data.get("release_date"), track_data.get("cover_path"),
+                local_release_date, track_data.get("cover_path"),
                 track_data.get("mbid"), track_data.get("comment")
             ))
             album_id = cursor.lastrowid
         else:
             album_id = existing_album["id"]
-            # Update album metadata if current track has more info (e.g. mbid found now)
+            # Update album metadata if current track has more info
             updates = {}
-            for field in ["release_date", "cover_path", "mbid", "comment"]:
+            # Update release_date only if current album has none but track has year
+            if not existing_album["release_date"] and local_release_date:
+                updates["release_date"] = local_release_date
+            
+            for field in ["cover_path", "mbid", "comment"]:
                 if track_data.get(field) and not existing_album[field]:
                     updates[field] = track_data[field]
             
@@ -281,6 +290,49 @@ def update_music_track(track_data):
             track_data["genre"], track_data["bpm"], track_data["duration"],
             album_id
         ))
+
+def update_music_album_metadata(album_id: int, new_artist: str, new_date: str):
+    conn = get_connection()
+    try:
+        with conn: # This starts a transaction in sqlite3
+            # 1. Update album info
+            conn.execute(
+                "UPDATE music_albums SET artist = ?, release_date = ? WHERE id = ?",
+                (new_artist, new_date, album_id)
+            )
+            # 2. Update all tracks belonging to this album
+            conn.execute(
+                "UPDATE music_tracks SET artist = ? WHERE album_id = ?",
+                (new_artist, album_id)
+            )
+    except sqlite3.Error as e:
+        # with conn will automatically rollback on exception, but we want to re-raise it
+        raise e
+    finally:
+        conn.close()
+
+def update_music_track_metadata(track_path: str, new_title: str, new_artist: str = None, new_album: str = None):
+    conn = get_connection()
+    try:
+        with conn:
+            updates = {"title": new_title}
+            if new_artist is not None:
+                updates["artist"] = new_artist
+            if new_album is not None:
+                updates["album"] = new_album
+            
+            set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+            params = list(updates.values())
+            params.append(track_path)
+            
+            conn.execute(
+                f"UPDATE music_tracks SET {set_clause} WHERE path = ?",
+                tuple(params)
+            )
+    except sqlite3.Error as e:
+        raise e
+    finally:
+        conn.close()
 
 def get_album_by_id(album_id: int):
     with get_connection() as conn:
