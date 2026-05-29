@@ -447,6 +447,15 @@ class VideoEditModal(Screen):
     #edit-type { width: 22; }
     #edit-season, #edit-episode { width: 6; }
 
+    #edit-refresh-btn {
+        margin: 1 0 0 0;
+        width: 100%;
+        background: $primary;
+        color: $text;
+        border: none;
+        height: 1;
+    }
+
     #edit-synopsis-text {
         height: auto;
         min-height: 2;
@@ -504,6 +513,7 @@ class VideoEditModal(Screen):
                 
                 yield Label("Synopsis")
                 yield Label(self.video.get("synopsis") or "(No synopsis available)", id="edit-synopsis-text")
+                yield Button("Fetch Info by Metadata", id="edit-refresh-btn")
                 
                 yield Label("Title")
                 yield Input(value=self.video.get("title") or "", id="edit-title")
@@ -516,12 +526,15 @@ class VideoEditModal(Screen):
                     with Vertical(id="col-ep"):
                         yield Label("Episode")
                         yield Input(value=str(self.video.get("episode") or ""), id="edit-episode", restrict=r"[0-9]*")
-                yield Label("Category")
-                yield Input(value=self.video.get("category") or "", id="edit-category")
-                yield Label("Type")
-                yield Input(value=self.video.get("type") or "", id="edit-type")
-            
-            yield Label("Enter: Save   ESC: Cancel", classes="edit-help")
+
+                        # Inherit category from last session edit if current is empty
+                        cat_val = self.video.get("category") or getattr(self.app, "_last_video_category", "")
+                        yield Label("Category")
+                        yield Input(value=cat_val or "", id="edit-category")
+
+                        yield Label("Type")
+                        yield Input(value=self.video.get("type") or "", id="edit-type")
+            yield Label("Enter: Save   ESC: Cancel   Ctrl+s: Fetch", classes="edit-help")
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id in self._limits:
@@ -533,19 +546,121 @@ class VideoEditModal(Screen):
     def on_mount(self) -> None:
         self.query_one("#edit-title").focus()
 
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(False)
+            event.stop()
+        elif event.key == "ctrl+s":
+            self._refresh_info()
+            event.stop()
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self._save()
 
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "edit-refresh-btn":
+            self._refresh_info()
+
+    def _refresh_info(self) -> None:
+        def handle_fetch_details(details: dict | None) -> None:
+            if details:
+                self.app.update_video_language(details["language"])
+                self.app.update_video_media_type(details["is_tv"])
+                self._do_refresh_info(details)
+        
+        query = self.query_one("#edit-series", Input).value or self.query_one("#edit-title", Input).value
+        # If no explicit series/season, use None so app.show_video_fetch_dialog uses config default
+        is_tv_hint = None
+        if self.query_one("#edit-series", Input).value or self.query_one("#edit-season", Input).value:
+            is_tv_hint = True
+        
+        try:
+            season = int(self.query_one("#edit-season", Input).value or 0)
+            episode = int(self.query_one("#edit-episode", Input).value or 0)
+        except ValueError:
+            season = episode = None
+            
+        self.app.show_video_fetch_dialog(query, is_tv_hint, handle_fetch_details, season=season, episode=episode)
+
+    @work(thread=True)
+    def _do_refresh_info(self, details: dict) -> None:
+        lang = details["language"]
+        tmdb_id = details.get("tmdb_id")
+        is_tv = details["is_tv"]
+        
+        if tmdb_id:
+            self.app.call_from_thread(self.app.notify, f"Fetching details for ID {tmdb_id}...")
+            self.app.video_lib.enrich_single_video_by_id(self.video, tmdb_id, is_tv=is_tv, language=lang, season=details.get("season"), episode=details.get("episode"))
+        else:
+            # Fallback to old behavior if no ID (should not happen with new modal)
+            query = details["query"]
+            self.app.call_from_thread(self.app.notify, f"Fetching info [{lang}] for '{query}'...")
+            
+            temp_video = dict(self.video)
+            temp_video["title"] = query
+            temp_video["series"] = query if is_tv else None
+            temp_video["season"] = int(self.query_one("#edit-season", Input).value or 0)
+            self.app.video_lib.enrich_single_video(temp_video, use_filename=False, language=lang)
+        
+        # Reload video data from DB
+        from ..database import get_connection
+        with get_connection() as conn:
+            updated = conn.execute("SELECT * FROM video_files WHERE path = ?", (self.video["path"],)).fetchone()
+        
+        if updated:
+            self.video = dict(updated)
+            self.app.call_from_thread(self._update_ui)
+            self.app.call_from_thread(self.app.notify, "Metadata updated")
+
+    def _update_ui(self) -> None:
+        """Update UI fields after background refresh."""
+        self.query_one("#edit-synopsis-text", Label).update(self.video.get("synopsis") or "(No synopsis available)")
+        
+        # ONLY update inputs if they are currently empty, or if we want to force update 
+        # from newly fetched metadata. But TMDB fetch doesn't usually return Series/S/E.
+        # Let's update ONLY the synopsis and title (if title was fetched).
+        if self.video.get("title"):
+             self.query_one("#edit-title", Input).value = self.video.get("title")
+
+        # Keep current inputs for series/season/episode to avoid clearing them
+        # if they were manually entered but not yet saved to DB.
+        
+        # Update Image if changed
+        poster = self.video.get("poster_path")
+        thumb = self.video.get("thumbnail_path")
+        display_img = poster if poster else thumb
+        if display_img:
+            # We are already in the main thread (called via call_from_thread)
+            self._refresh_poster(display_img)
+
+    def _refresh_poster(self, path: str) -> None:
+        try:
+            img_widget = self.query_one(Image)
+            # Recreating the image widget is the most reliable way to update
+            parent = img_widget.parent
+            img_widget.remove()
+            parent.mount(Image(path), before=self.query_one("#edit-synopsis-text"))
+        except Exception:
+            pass
+
     def _save(self) -> None:
         try:
+            def clean(val: str) -> str | None:
+                v = val.strip()
+                return v if v else None
+
             fields = {
-                "title": self.query_one("#edit-title", Input).value,
-                "series": self.query_one("#edit-series", Input).value,
+                "title": clean(self.query_one("#edit-title", Input).value),
+                "series": clean(self.query_one("#edit-series", Input).value),
                 "season": int(self.query_one("#edit-season", Input).value or 0),
                 "episode": int(self.query_one("#edit-episode", Input).value or 0),
-                "category": self.query_one("#edit-category", Input).value,
-                "type": self.query_one("#edit-type", Input).value,
+                "category": clean(self.query_one("#edit-category", Input).value),
+                "type": clean(self.query_one("#edit-type", Input).value),
             }
+            # Remember the category for subsequent edits
+            if fields["category"]:
+                self.app._last_video_category = fields["category"]
+            
             update_video_manual_fields(self.video["path"], fields)
             self.app.notify("Video info updated")
             self.dismiss(True)

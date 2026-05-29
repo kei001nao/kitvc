@@ -1,3 +1,4 @@
+import os
 from textual.app import ComposeResult
 from textual.message import Message
 from textual.widget import Widget
@@ -43,6 +44,16 @@ class TrackList(Widget):
         table.add_column("Time", key="time")
         if self._tracks:
             self.load(self._tracks)
+
+    def set_current_index_by_path(self, path: str | None, is_paused: bool = False) -> None:
+        target_idx = -1
+        if path:
+            norm_path = os.path.normpath(path)
+            for i, t in enumerate(self._tracks):
+                if os.path.normpath(t["path"]) == norm_path:
+                    target_idx = i
+                    break
+        self.set_current_index(target_idx, is_paused)
 
     def set_current_index(self, index: int, is_paused: bool = False) -> None:
         # Only update if index or paused state changed

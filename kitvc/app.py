@@ -325,6 +325,7 @@ class KitvcApp(App):
         Binding("2", "switch_to_playlists", "Music PL", priority=True),
         Binding("3", "switch_to_video_playlists", "Video PL", priority=True),
         Binding("ctrl+s", "scan", "Scan Lib"),
+        Binding("ctrl+shift+s", "video_targeted_scan", "Video Scan", show=False),
         Binding("ctrl+o", "import_playlist", "Import M3U"),
         Binding("l", "seek(5)", "Seek +5s", show=False),
         Binding("h", "seek(-5)", "Seek -5s", show=False),
@@ -565,6 +566,80 @@ class KitvcApp(App):
         self.notify("Scanning libraries...")
         self.scan_libraries(asyncio.get_running_loop())
 
+    def action_video_targeted_scan(self) -> None:
+        """Trigger targeted video scan for marked/selected items."""
+        # Check if we are on a video screen
+        from .widgets.media_lists import VideoList
+        try:
+            vl = self.query_one(VideoList)
+        except Exception:
+            self.notify("No video list focused", severity="warning")
+            return
+
+        videos = vl.get_marked_videos()
+        if not videos:
+            self.notify("No videos selected/marked", severity="warning")
+            return
+
+        from .widgets.modals import VideoScanChoiceModal
+        def handle_choice(method: str | None) -> None:
+            if method:
+                # Ask for search details
+                def handle_fetch_details(details: dict | None) -> None:
+                    if details:
+                        lang = details["language"]
+                        is_tv = details["is_tv"]
+                        self.update_video_language(lang)
+                        self.update_video_media_type(is_tv)
+                        self._do_targeted_video_scan(videos, details)
+                
+                # Use first video's data as default for the fetch dialog
+                v = videos[0]
+                default_query = v.get("series") or v.get("title")
+                if method == "filename":
+                    from .utils import parse_video_filename
+                    meta = parse_video_filename(v["filename"])
+                    default_query = meta.get("series") or meta.get("title")
+                
+                is_tv = bool(v.get("series") or v.get("season"))
+                season = v.get("season")
+                episode = v.get("episode")
+                if method == "filename":
+                    season = meta.get("season")
+                    episode = meta.get("episode")
+                
+                self.show_video_fetch_dialog(default_query or "", is_tv, handle_fetch_details, season=season, episode=episode)
+        
+        self.push_screen(VideoScanChoiceModal(len(videos)), callback=handle_choice)
+
+    @work(thread=True)
+    def _do_targeted_video_scan(self, videos: list[dict], details: dict) -> None:
+        query = details["query"]
+        is_tv = details["is_tv"]
+        lang = details["language"]
+        
+        self.call_from_thread(self.notify, f"Refreshing {len(videos)} video(s) [{lang}]...")
+        
+        for i, video in enumerate(videos, 1):
+            if len(videos) > 1:
+                self.call_from_thread(self.notify, f"Scanning ({i}/{len(videos)}): {video['filename']}")
+            
+            # Use custom query and type from the fetch modal for the FIRST video
+            # For subsequent videos in a batch, it's tricky. 
+            # If it's a batch, we probably should still use auto-logic but with the chosen language.
+            # But let's assume if user specified a query, they want to apply it to all selected (e.g. same series).
+            v_to_scan = dict(video)
+            if i == 1:
+                v_to_scan["series"] = query
+                # We can't easily override 'is_tv' inside enrich_single_video without changes, 
+                # but enrich_single_video already checks series/season.
+            
+            # Temporary change to VideoLibrary to support explicit override
+            self.video_lib.enrich_single_video_by_id(v_to_scan, details["tmdb_id"], is_tv=is_tv, language=lang, season=details.get("season"), episode=details.get("episode"))
+        
+        self.call_from_thread(self.notify, "Targeted scan complete")
+        self.call_from_thread(self._refresh_current_screen)
+
     async def _watch_theme(self) -> None:
         if not THEME_PATH.exists(): return
         try:
@@ -788,6 +863,31 @@ class KitvcApp(App):
     def show_playlist_add_dialog(self, track_paths: list[str], is_video: bool = False) -> None:
         if isinstance(track_paths, str): track_paths = [track_paths]
         self.push_screen(PlaylistQuickAddModal(track_paths, is_video=is_video))
+
+    def show_video_fetch_dialog(self, query: str, is_tv: bool | None, callback: callable, season: int = None, episode: int = None) -> None:
+        from .widgets.modals import VideoFetchModal
+        current_lang = self.config.get("video", {}).get("language", "ja")
+        
+        # Use provided is_tv, or persisted config, or default True
+        if is_tv is None:
+            is_tv = self.config.get("video", {}).get("is_tv", True)
+            
+        self.push_screen(VideoFetchModal(query, is_tv, current_lang, season=season, episode=episode), callback=callback)
+
+    def update_video_language(self, lang: str) -> None:
+        if "video" not in self.config:
+            self.config["video"] = {}
+        self.config["video"]["language"] = lang
+        from .config import save_config
+        save_config(self.config)
+        self.notify(f"Default language set to: {lang}")
+
+    def update_video_media_type(self, is_tv: bool) -> None:
+        if "video" not in self.config:
+            self.config["video"] = {}
+        self.config["video"]["is_tv"] = is_tv
+        from .config import save_config
+        save_config(self.config)
 
     @work(thread=True)
     def export_playlist_to_m3u(self, playlist_id: int, is_video: bool = False) -> None:

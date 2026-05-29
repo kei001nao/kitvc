@@ -390,6 +390,10 @@ class VideoLibrary:
     def enrich_metadata(self, progress_cb: Optional[Callable[[str], None]] = None):
         """Phase 2: Fetch missing video info from TMDB."""
         try:
+            from .config import load_config
+            config = load_config()
+            lang = config.get("video", {}).get("language", "ja")
+
             with get_connection() as conn:
                 videos = [dict(row) for row in conn.execute(
                     "SELECT id, path, filename, title, series, season, episode, tmdb_id FROM video_files WHERE synopsis IS NULL"
@@ -397,40 +401,78 @@ class VideoLibrary:
 
             total = len(videos)
             for i, video in enumerate(videos, 1):
-                path = video["path"]
-                filename = video["filename"]
-                
-                # Determine search title
-                search_title = video.get("series") or video.get("title")
-                if not search_title:
-                    from .utils import parse_video_filename
-                    meta = parse_video_filename(filename)
-                    search_title = meta.get("series") or meta.get("title")
-                
-                if not search_title:
-                    continue
-
-                is_tv = bool(video.get("series") or video.get("season"))
-                
-                if progress_cb:
-                    progress_cb(f"Fetching TMDB ({i}/{total}): {search_title}")
-                
-                logger.info(f"Searching TMDB for: {search_title} (is_tv={is_tv})")
-                meta = fetch_video_metadata(search_title, is_tv=is_tv)
-                
-                if meta:
-                    updates = {}
-                    for field in ["synopsis", "cast", "director", "year", "poster_path"]:
-                        if meta.get(field):
-                            updates[field] = meta[field]
-                    
-                    if updates:
-                        with get_connection() as conn:
-                            set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
-                            params = list(updates.values())
-                            params.append(path)
-                            conn.execute(f"UPDATE video_files SET {set_clause} WHERE path = ?", params)
-                            logger.info(f"Updated metadata for: {path}")
+                self.enrich_single_video(video, language=lang, progress_cb=lambda msg: progress_cb(f"({i}/{total}) {msg}") if progress_cb else None)
 
         except Exception as e:
             logger.exception("VideoLibrary.enrich_metadata failed")
+
+    def enrich_single_video(self, video: dict, use_filename: bool = True, language: str = "ja", progress_cb: Optional[Callable[[str], None]] = None):
+        """Fetch metadata for a single video item."""
+        try:
+            path = video["path"]
+            filename = video["filename"]
+            
+            # Determine search title
+            if use_filename:
+                from .utils import parse_video_filename
+                meta = parse_video_filename(filename)
+                search_title = meta.get("series") or meta.get("title")
+                is_tv = bool(meta.get("series") or meta.get("season"))
+            else:
+                search_title = video.get("series") or video.get("title")
+                is_tv = bool(video.get("series") or video.get("season"))
+            
+            if not search_title:
+                logger.warning(f"No search title found for: {filename}")
+                return
+
+            if progress_cb:
+                progress_cb(f"Fetching TMDB ({language}): {search_title}")
+            
+            logger.info(f"Searching TMDB for: {search_title} (is_tv={is_tv}, lang={language})")
+            from .metadata_video import fetch_video_metadata
+            meta = fetch_video_metadata(search_title, is_tv=is_tv, language=language)
+            
+            if meta:
+                updates = {}
+                for field in ["synopsis", "cast", "director", "year", "poster_path"]:
+                    if meta.get(field):
+                        updates[field] = meta[field]
+                
+                if updates:
+                    logger.info(f"Writing to DB for '{path}': {updates}")
+                    with get_connection() as conn:
+                        set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+                        params = list(updates.values())
+                        params.append(path)
+                        conn.execute(f"UPDATE video_files SET {set_clause} WHERE path = ?", params)
+                        logger.info(f"Successfully updated DB for: {path}")
+            else:
+                logger.info(f"No TMDB results for: {search_title}")
+
+        except Exception as e:
+            logger.error(f"enrich_single_video failed for {video.get('filename')}: {e}")
+
+    def enrich_single_video_by_id(self, video: dict, tmdb_id: int, is_tv: bool, language: str = "ja", season: int = None, episode: int = None):
+        """Fetch metadata for a single video item by a specific TMDB ID, with optional S/E."""
+        try:
+            path = video["path"]
+            from .metadata_video import fetch_video_details_by_id
+            meta = fetch_video_details_by_id(tmdb_id, is_tv=is_tv, language=language, season=season, episode=episode)
+            
+            if meta:
+                updates = {}
+                for field in ["synopsis", "cast", "director", "year", "poster_path"]:
+                    if meta.get(field):
+                        updates[field] = meta[field]
+                
+                if updates:
+                    logger.info(f"Writing to DB (By ID) for '{path}': {updates}")
+                    with get_connection() as conn:
+                        set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+                        params = list(updates.values())
+                        params.append(path)
+                        conn.execute(f"UPDATE video_files SET {set_clause} WHERE path = ?", params)
+                        logger.info(f"Successfully updated DB (By ID) for: {path}")
+        except Exception as e:
+            logger.error(f"enrich_single_video_by_id failed: {e}")

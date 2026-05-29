@@ -85,6 +85,19 @@ class MusicArtistScreen(Widget):
         table.add_column("Date", key="release_date", width=12)
         table.add_column("Album", key="album")
         self._load_albums()
+        self.set_interval(0.5, self._update_playback_status)
+
+    def _update_playback_status(self) -> None:
+        try:
+            tl = self.query_one("#music-tracks", TrackList)
+            curr = self.app.music_player.get_current_track()
+            if not curr:
+                tl.set_current_index(-1)
+                return
+            is_paused = self.app.music_player._paused
+            tl.set_current_index_by_path(curr["path"], is_paused)
+        except Exception:
+            pass
 
     @work(thread=True)
     def _load_albums(self) -> None:
@@ -145,8 +158,8 @@ class MusicArtistScreen(Widget):
             pass
 
     def on_key(self, event) -> None:
+        table = self.query_one("#music-albums", DataTable)
         if event.key == "q":
-            table = self.query_one("#music-albums", DataTable)
             if table.has_focus and table.cursor_row is not None:
                 try:
                     idx = int(str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value))
@@ -154,11 +167,24 @@ class MusicArtistScreen(Widget):
                     self._add_album_to_queue(album_name)
                 except Exception:
                     pass
+            event.stop()
         elif event.key == "a":
-            table = self.query_one("#music-albums", DataTable)
             if table.has_focus and table.cursor_row is not None:
                 if self._current_album_tracks:
                     self.app.show_playlist_add_dialog([t["path"] for t in self._current_album_tracks])
+            event.stop()
+        elif event.key == "ctrl+e":
+            if table.has_focus and table.cursor_row is not None:
+                try:
+                    idx = int(str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value))
+                    album = self._albums_list[idx]
+                    album_data = dict(album)
+                    album_data["artist"] = self._artist_name
+                    from .music import MusicAlbumEditModal
+                    self.app.push_screen(MusicAlbumEditModal(album_data), callback=self._on_album_edit_finished)
+                except Exception:
+                    pass
+            event.stop()
 
     @work(thread=True)
     def _add_album_to_queue(self, album_name: str) -> None:
@@ -192,30 +218,6 @@ class MusicArtistScreen(Widget):
         self._current_album_tracks = tracks
         self.app.call_from_thread(self.query_one(TrackList).load, tracks)
 
-    def on_key(self, event) -> None:
-        if event.key == "ctrl+e":
-            table = self.query_one("#music-albums", DataTable)
-            if table.has_focus and table.cursor_row is not None:
-                try:
-                    idx = int(str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value))
-                    album = self._albums_list[idx]
-                    # Pass the artist name to the modal
-                    album_data = dict(album)
-                    album_data["artist"] = self._artist_name
-                    from .music import MusicAlbumEditModal
-                    self.app.push_screen(MusicAlbumEditModal(album_data), callback=self._on_album_edit_finished)
-                except Exception:
-                    pass
-            event.stop()
-        elif event.key == "q":
-            table = self.query_one("#music-albums", DataTable)
-            if table.has_focus and table.cursor_row is not None:
-                try:
-                    idx = int(str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value))
-                    album_name = self._albums_list[idx]['album']
-                    self._add_album_to_queue(album_name)
-                except Exception:
-                    pass
     def _on_album_edit_finished(self, result: bool) -> None:
         if result:
             # Re-check if this artist still has albums (they might have been renamed)
@@ -245,6 +247,9 @@ class MusicArtistScreen(Widget):
             if self._current_album_idx != -1:
                 album_name = self._albums_list[self._current_album_idx]['album']
                 self._load_tracks(album_name)
+
+    def on_track_list_track_selected(self, event: TrackList.TrackSelected) -> None:
+        self.app.play_track(event.track, event.tracks, event.index)
 
 class MusicPlaylistScreen(Widget):
     DEFAULT_CSS = """
@@ -277,6 +282,23 @@ class MusicPlaylistScreen(Widget):
         table = self.query_one("#playlist-selector", DataTable)
         table.add_column("Playlist Name", key="name")
         self.reload_playlists()
+        self.set_interval(0.5, self._update_playback_status)
+
+    def _update_playback_status(self) -> None:
+        try:
+            tl = self.query_one("#playlist-tracks", TrackList)
+            curr = self.app.music_player.get_current_track()
+            if not curr:
+                tl.set_current_index(-1)
+                return
+            
+            # For playlists, we should probably search by path because the queue might be different
+            # But TrackList only has set_current_index. 
+            # Let's add set_current_index_by_path to TrackList as well.
+            is_paused = self.app.music_player._paused
+            tl.set_current_index_by_path(curr["path"], is_paused)
+        except Exception:
+            pass
 
     def reload_playlists(self) -> None:
         from ..database import get_playlists
@@ -419,8 +441,7 @@ class MusicPlaylistScreen(Widget):
             self.app.query_one("Sidebar").refresh_tree()
 
     def on_track_list_track_selected(self, event: TrackList.TrackSelected) -> None:
-        # Disable Enter to play in playlist screen
-        pass
+        self.app.play_track(event.track, event.tracks, event.index)
 
     def on_track_list_track_edit_requested(self, event: TrackList.TrackEditRequested) -> None:
         from .music import MusicTrackEditModal
