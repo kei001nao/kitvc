@@ -430,15 +430,29 @@ class VideoLibrary:
                 progress_cb(f"Fetching TMDB ({language}): {search_title}")
             
             logger.info(f"Searching TMDB for: {search_title} (is_tv={is_tv}, lang={language})")
-            from .metadata_video import fetch_video_metadata
+            from .metadata_video import fetch_video_metadata, download_video_poster
             meta = fetch_video_metadata(search_title, is_tv=is_tv, language=language)
             
             if meta:
                 updates = {}
-                for field in ["synopsis", "cast", "director", "year", "poster_path"]:
+                for field in ["synopsis", "cast", "director", "year", "poster_path", "episode_overview"]:
                     if meta.get(field):
                         updates[field] = meta[field]
                 
+                # Download poster
+                if meta.get("poster_path"):
+                    local = download_video_poster(meta["poster_path"], CONFIG_DIR / "posters", meta.get("series") or meta.get("title") or "video")
+                    if local:
+                        updates["local_poster_path"] = local
+                if meta.get("series_poster_path"):
+                    local = download_video_poster(meta["series_poster_path"], CONFIG_DIR / "posters", (meta.get("series") or "series") + "_series")
+                    if local:
+                        updates["local_series_poster_path"] = local
+                if meta.get("still_path"):
+                    local = download_video_poster(meta["still_path"], CONFIG_DIR / "posters", (meta.get("series") or "series") + "_still")
+                    if local:
+                        updates["local_still_path"] = local
+
                 if updates:
                     logger.info(f"Writing to DB for '{path}': {updates}")
                     with get_connection() as conn:
@@ -457,15 +471,34 @@ class VideoLibrary:
         """Fetch metadata for a single video item by a specific TMDB ID, with optional S/E."""
         try:
             path = video["path"]
-            from .metadata_video import fetch_video_details_by_id
+            from .metadata_video import fetch_video_details_by_id, download_video_poster
             meta = fetch_video_details_by_id(tmdb_id, is_tv=is_tv, language=language, season=season, episode=episode)
             
             if meta:
                 updates = {}
-                for field in ["synopsis", "cast", "director", "year", "poster_path"]:
-                    if meta.get(field):
+                for field in [
+                    "synopsis", "cast", "director", "year", "poster_path", 
+                    "type", "series", "series_overview", "first_air_date", 
+                    "series_poster_path", "genres", "air_date", "title",
+                    "season_name", "season_overview", "still_path", "episode_overview"
+                ]:
+                    if meta.get(field) is not None:
                         updates[field] = meta[field]
                 
+                # Download posters
+                if meta.get("poster_path"):
+                    local = download_video_poster(meta["poster_path"], CONFIG_DIR / "posters", meta.get("series") or meta.get("title") or "video")
+                    if local:
+                        updates["local_poster_path"] = local
+                if meta.get("series_poster_path"):
+                    local = download_video_poster(meta["series_poster_path"], CONFIG_DIR / "posters", (meta.get("series") or "series") + "_series")
+                    if local:
+                        updates["local_series_poster_path"] = local
+                if meta.get("still_path"):
+                    local = download_video_poster(meta["still_path"], CONFIG_DIR / "posters", (meta.get("series") or "series") + "_still")
+                    if local:
+                        updates["local_still_path"] = local
+
                 if updates:
                     logger.info(f"Writing to DB (By ID) for '{path}': {updates}")
                     with get_connection() as conn:

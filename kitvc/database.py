@@ -64,7 +64,19 @@ def init_db():
                 director TEXT,
                 year INTEGER,
                 tmdb_id TEXT,
-                poster_path TEXT
+                poster_path TEXT,
+                air_date TEXT,
+                series_overview TEXT,
+                first_air_date TEXT,
+                series_poster_path TEXT,
+                genres TEXT,
+                season_name TEXT,
+                season_overview TEXT,
+                still_path TEXT,
+                episode_overview TEXT,
+                local_poster_path TEXT,
+                local_series_poster_path TEXT,
+                local_still_path TEXT
             )
         """)
         # Separate Playlist tables for Music and Video
@@ -106,7 +118,13 @@ def init_db():
             "video_files": [
                 ("duration", "INTEGER DEFAULT 0"),
                 ("synopsis", "TEXT"), ("cast", "TEXT"), ("director", "TEXT"),
-                ("year", "INTEGER"), ("tmdb_id", "TEXT"), ("poster_path", "TEXT")
+                ("year", "INTEGER"), ("tmdb_id", "TEXT"), ("poster_path", "TEXT"),
+                ("air_date", "TEXT"), ("series_overview", "TEXT"),
+                ("first_air_date", "TEXT"), ("series_poster_path", "TEXT"),
+                ("genres", "TEXT"), ("season_name", "TEXT"),
+                ("season_overview", "TEXT"), ("still_path", "TEXT"),
+                ("episode_overview", "TEXT"), ("local_poster_path", "TEXT"),
+                ("local_series_poster_path", "TEXT"), ("local_still_path", "TEXT")
             ]
         }.items():
             existing_cols = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
@@ -353,14 +371,11 @@ def update_video_file(video_data):
         if existing:
             conn.execute("""
                 UPDATE video_files SET 
-                    mtime = ?, filename = ?, size = ?, duration = ?, thumbnail_path = ?,
-                    synopsis = ?, cast = ?, director = ?, year = ?, tmdb_id = ?, poster_path = ?
+                    mtime = ?, filename = ?, size = ?, duration = ?, thumbnail_path = ?
                 WHERE path = ?
             """, (
                 video_data["mtime"], video_data["filename"], video_data["size"], 
                 video_data.get("duration", 0), video_data.get("thumbnail_path"),
-                video_data.get("synopsis"), video_data.get("cast"), video_data.get("director"),
-                video_data.get("year"), video_data.get("tmdb_id"), video_data.get("poster_path"),
                 video_data["path"]
             ))
         else:
@@ -369,21 +384,25 @@ def update_video_file(video_data):
             conn.execute("""
                 INSERT INTO video_files (
                     path, mtime, filename, size, duration,
-                    series, season, episode, thumbnail_path,
-                    synopsis, cast, director, year, tmdb_id, poster_path
+                    series, season, episode, thumbnail_path
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 video_data["path"], video_data["mtime"], video_data["filename"], 
                 video_data["size"], video_data.get("duration", 0), meta.get("series"), 
-                meta.get("season"), meta.get("episode"), video_data.get("thumbnail_path"),
-                video_data.get("synopsis"), video_data.get("cast"), video_data.get("director"),
-                video_data.get("year"), video_data.get("tmdb_id"), video_data.get("poster_path")
+                meta.get("season"), meta.get("episode"), video_data.get("thumbnail_path")
             ))
 
 def update_video_manual_fields(path, fields):
-    # fields is a dict of category, series, season, episode, title, type
-    allowed = {"type", "category", "series", "season", "episode", "title"}
+    # fields is a dict of metadata fields
+    allowed = {
+        "type", "category", "series", "season", "episode", "title",
+        "synopsis", "cast", "director", "year", "tmdb_id", "poster_path",
+        "air_date", "series_overview", "first_air_date", "series_poster_path",
+        "genres", "season_name", "season_overview", "still_path",
+        "episode_overview", "local_poster_path", "local_series_poster_path",
+        "local_still_path"
+    }
     sets = []
     values = []
     for k, v in fields.items():

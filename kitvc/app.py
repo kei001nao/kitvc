@@ -498,8 +498,8 @@ class KitvcApp(App):
         track = active_player.get_current_track()
         if pos is not None and dur is not None and track:
             # 1. Ensure we have the latest metadata (including cover_path) from DB
-            if not track.get("is_video"):
-                with get_connection() as conn:
+            with get_connection() as conn:
+                if not track.get("is_video"):
                     row = conn.execute("""
                         SELECT t.*, a.cover_path as album_cover, a.release_date, a.mbid
                         FROM music_tracks t
@@ -515,12 +515,26 @@ class KitvcApp(App):
                              track["cover_path"] = db_data["cover_path"]
                              
                         if db_data.get("mbid"): track["mbid"] = db_data["mbid"]
+                else:
+                    row = conn.execute("""
+                        SELECT local_still_path, local_poster_path, local_series_poster_path, 
+                               still_path, poster_path, series_poster_path, thumbnail_path
+                        FROM video_files WHERE path = ?
+                    """, (track["path"],)).fetchone()
+                    if row:
+                        db_data = dict(row)
+                        # Priority: local_still > local_poster > local_series > still > poster > series > thumb
+                        track["cover_path"] = db_data.get("local_still_path") or \
+                                             db_data.get("local_poster_path") or \
+                                             db_data.get("local_series_poster_path") or \
+                                             db_data.get("still_path") or \
+                                             db_data.get("poster_path") or \
+                                             db_data.get("series_poster_path") or \
+                                             db_data.get("thumbnail_path")
 
-            # 2. Update sidebar cover ONLY if it's music and not currently seeking
-            if not track.get("is_video"):
-                current_cover = track.get("cover_path")
-                # Force update if active_player._current_idx changed or path is new
-                self.update_sidebar_cover(current_cover)
+            # 2. Update sidebar cover
+            current_cover = track.get("cover_path")
+            self.update_sidebar_cover(current_cover)
 
             self._current_media = track
             title = track.get("title") or track.get("filename")
@@ -868,9 +882,9 @@ class KitvcApp(App):
         from .widgets.modals import VideoFetchModal
         current_lang = self.config.get("video", {}).get("language", "ja")
         
-        # Use provided is_tv, or persisted config, or default True
+        # Use provided is_tv, or default True
         if is_tv is None:
-            is_tv = self.config.get("video", {}).get("is_tv", True)
+            is_tv = True
             
         self.push_screen(VideoFetchModal(query, is_tv, current_lang, season=season, episode=episode), callback=callback)
 
@@ -883,11 +897,8 @@ class KitvcApp(App):
         self.notify(f"Default language set to: {lang}")
 
     def update_video_media_type(self, is_tv: bool) -> None:
-        if "video" not in self.config:
-            self.config["video"] = {}
-        self.config["video"]["is_tv"] = is_tv
-        from .config import save_config
-        save_config(self.config)
+        # No longer persisting to config as per user request
+        pass
 
     @work(thread=True)
     def export_playlist_to_m3u(self, playlist_id: int, is_video: bool = False) -> None:

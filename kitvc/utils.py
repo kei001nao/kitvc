@@ -6,6 +6,7 @@ from .config import CONFIG_DIR
 
 CACHE_DIR = Path.home() / ".cache" / "kitvc"
 THUMB_DIR = CACHE_DIR / "thumbnails"
+IMAGE_CACHE_DIR = CACHE_DIR / "images"
 
 def parse_video_filename(filename: str) -> dict:
     """
@@ -70,3 +71,33 @@ def generate_thumbnail(video_path: str) -> str | None:
             return str(thumb_path)
         except Exception:
             return None
+
+def ensure_local_image(path_or_url: str) -> str | None:
+    """Ensure image is local (downloads if URL). Returns local path."""
+    if not path_or_url:
+        return None
+    
+    if path_or_url.startswith(("http://", "https://")):
+        IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        import hashlib
+        import requests
+        url_hash = hashlib.md5(path_or_url.encode()).hexdigest()
+        ext = path_or_url.split(".")[-1].split("?")[0]
+        if len(ext) > 4: ext = "jpg" # Fallback
+        local_path = IMAGE_CACHE_DIR / f"{url_hash}.{ext}"
+        
+        if local_path.exists():
+            return str(local_path)
+            
+        try:
+            resp = requests.get(path_or_url, timeout=10)
+            if resp.status_code == 200:
+                local_path.write_bytes(resp.content)
+                return str(local_path)
+        except Exception:
+            return None
+    
+    # Already local or invalid
+    if os.path.exists(path_or_url):
+        return path_or_url
+    return None

@@ -213,14 +213,14 @@ class VideoList(Widget):
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
         table.add_column("M", key="mark")
-        table.add_column("Title", key="title")
+        table.add_column("Type", key="type", width=10)
         table.add_column("Series", key="series")
-        table.add_column("S", key="season")
-        table.add_column("E", key="episode")
+        table.add_column("S", key="season", width=3)
+        table.add_column("E", key="episode", width=3)
+        table.add_column("Title", key="title")
+        table.add_column("Date", key="air_date", width=10)
         table.add_column("Category", key="category")
-        table.add_column("Type", key="type")
         table.add_column("Filename", key="filename")
-        table.add_column("Size", key="size")
         if self._videos:
             self.load(self._videos)
 
@@ -293,7 +293,6 @@ class VideoList(Widget):
         table = tables.first()
         table.clear()
         for i, v in enumerate(videos):
-            size_mb = v.get("size", 0) / (1024 * 1024)
             mark = " "
             if i == self._current_index:
                 mark = "▶"
@@ -302,14 +301,14 @@ class VideoList(Widget):
                 
             table.add_row(
                 mark,
-                v.get("title") or "",
+                v.get("type") or "",
                 v.get("series") or "",
                 str(v.get("season") or ""),
                 str(v.get("episode") or ""),
+                v.get("title") or "",
+                v.get("air_date") or "",
                 v.get("category") or "",
-                v.get("type") or "",
                 v.get("filename", ""),
-                f"{size_mb:.1f} MB",
                 key=str(i)
             )
 

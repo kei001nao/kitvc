@@ -2,6 +2,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.widgets import Label, DirectoryTree, DataTable, Input, RadioSet, RadioButton, Button
+from textual.coordinate import Coordinate
 from textual.containers import Vertical, Horizontal
 from pathlib import Path
 
@@ -12,70 +13,82 @@ class VideoFetchModal(Screen):
         background: rgba(0, 0, 0, 0.5);
     }
     #fetch-container {
-        width: 70;
-        height: 90%;
+        width: 95%;
+        height: 95%;
         border: panel $primary;
         background: $surface;
         padding: 1 1 0 1;
     }
-    #fetch-container Label { margin-top: 1; height: 1; text-style: bold; }
-    #fetch-container Input { margin-bottom: 0; border: none; background: $accent 10%; color: $text; padding: 0 1; height: 1; }
-    #tv-params-container { height: auto; margin-top: 0; }
-    #tv-params-container Vertical { width: 10; margin-right: 2; height: auto; }
-    #fetch-container RadioSet { background: transparent; border: none; padding: 0; margin: 0; height: 3; layout: horizontal; }
-    #fetch-container RadioButton { margin-right: 2; padding: 0; }
-    #fetch-container DataTable#lang-list { height: 6; background: transparent; border: none; margin-top: 1; }
-    #fetch-container DataTable#result-list { height: 1fr; background: transparent; border: solid $primary; margin-top: 1; }
-    #fetch-container Button#search-btn { margin-top: 1; width: 100%; background: $accent; color: $text; }
-    .help { width: 100%; text-align: center; background: $primary; color: $text; margin-top: 1; height: 1; }
+    #fetch-header { height: 14; margin-bottom: 0; border-bottom: solid $primary; }
+    #fetch-header Label { margin-top: 0; height: 1; text-style: bold; }
+    #fetch-header Input { margin-bottom: 0; border: none; background: $accent 10%; color: $text; padding: 0 1; height: 1; }
+    
+    #type-box { width: 30; }
+    #lang-box { width: 1fr; }
+    
+    #fetch-header RadioSet { background: transparent; border: none; padding: 0; margin: 0; height: 3; layout: horizontal; }
+    #fetch-header RadioButton { margin-right: 2; padding: 0; }
+    #fetch-header DataTable#lang-list { height: 5; background: transparent; border: none; margin-top: 0; }
+    #fetch-header Button#search-btn { margin-top: 1; width: 100%; background: $accent; color: $text; height: 3; }
+    
+    #list-container { height: 1fr; margin-top: 0; }
+    #list-container DataTable { height: 100%; background: transparent; border: solid $primary; }
+    #series-list { width: 30%; }
+    #season-list { width: 20%; }
+    #episode-list { width: 50%; }
+
+    #preview-area { height: 6; border-top: solid $primary; padding: 1; }
+    .help { width: 100%; text-align: center; background: $primary; color: $text; margin-top: 0; height: 1; }
     """
     def __init__(self, query: str, is_tv: bool = True, language: str = "ja", season: int = None, episode: int = None, **kwargs):
         super().__init__(**kwargs)
         self.search_query = query
         self.is_tv = is_tv
         self.language = language
-        self.season = season
-        self.episode = episode
+        self.target_season = season
+        self.target_episode = episode
         self._langs = [
-            ("ja", "Japanese (日本語)"),
-            ("en", "English (英語)"),
-            ("ko", "Korean (韓国語)"),
-            ("zh", "Chinese (中国語)"),
+            ("ja", "Japanese"), ("en", "English"), ("ko", "Korean"), ("zh", "Chinese"),
         ]
-        self._results = []
+        self._series_results = []
+        self._season_results = []
+        self._episode_results = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="fetch-container"):
-            yield Label("Search Query (Series):")
-            yield Input(value=self.search_query, id="search-query")
+            with Vertical(id="fetch-header"):
+                yield Label("Search Query:")
+                yield Input(value=self.search_query, id="search-query")
+                
+                with Horizontal():
+                    with Vertical(id="type-box"):
+                        yield Label("Media Type:")
+                        with RadioSet(id="media-type"):
+                            yield RadioButton("TV Show", value=self.is_tv)
+                            yield RadioButton("Movie", value=not self.is_tv)
+                    with Vertical(id="lang-box"):
+                        yield Label("Language:")
+                        yield DataTable(id="lang-list", cursor_type="row")
+                
+                yield Button("Search TMDB", id="search-btn")
             
-            with Horizontal(id="tv-params-container"):
-                with Vertical():
-                    yield Label("S:")
-                    yield Input(value=str(self.season or ""), id="fetch-season", restrict=r"[0-9]*")
-                with Vertical():
-                    yield Label("E:")
-                    yield Input(value=str(self.episode or ""), id="fetch-episode", restrict=r"[0-9]*")
-
-            yield Label("Media Type:")
-            with RadioSet(id="media-type"):
-                yield RadioButton("TV Show", value=self.is_tv)
-                yield RadioButton("Movie", value=not self.is_tv)
+            with Horizontal(id="list-container"):
+                yield DataTable(id="series-list", cursor_type="row")
+                yield DataTable(id="season-list", cursor_type="row")
+                yield DataTable(id="episode-list", cursor_type="row")
             
-            yield Label("Language:")
-            yield DataTable(id="lang-list", cursor_type="row")
+            with Vertical(id="preview-area"):
+                yield Label("", id="preview-text")
             
-            yield Button("Search TMDB", id="search-btn")
-            
-            yield Label("Results (Select and Enter to Apply):")
-            yield DataTable(id="result-list", cursor_type="row")
-            
-            yield Label("Enter: Select Result   Tab: Switch Focus   ESC: Cancel", classes="help")
+            yield Label("Tab: Focus   Enter: Select/Fetch   ESC: Cancel", classes="help")
 
     def on_mount(self) -> None:
+        # Lang table
         table_lang = self.query_one("#lang-list", DataTable)
-        table_lang.add_column("Code")
+        table_lang.add_column("Code", width=4)
         table_lang.add_column("Language")
+        table_lang.fixed_columns = 0
+        table_lang.header_height = 0
         
         selected_row = 0
         for i, (code, name) in enumerate(self._langs):
@@ -84,10 +97,20 @@ class VideoFetchModal(Screen):
                 selected_row = i
         table_lang.move_cursor(row=selected_row)
         
-        table_res = self.query_one("#result-list", DataTable)
-        table_res.add_column("Title")
-        table_res.add_column("Year")
-        table_res.add_column("Overview")
+        # Series table
+        t_series = self.query_one("#series-list", DataTable)
+        t_series.add_column("Series/Movie")
+        t_series.add_column("Year", width=5)
+        
+        # Season table
+        t_season = self.query_one("#season-list", DataTable)
+        t_season.add_column("Season")
+        
+        # Episode table
+        t_episode = self.query_one("#episode-list", DataTable)
+        t_episode.add_column("E#", width=3)
+        t_episode.add_column("Episode Title")
+        t_episode.add_column("Date", width=10)
         
         self.query_one("#search-query").focus()
 
@@ -106,8 +129,7 @@ class VideoFetchModal(Screen):
     @work(thread=True)
     def _perform_search(self) -> None:
         query = self.query_one("#search-query", Input).value.strip()
-        if not query:
-            return
+        if not query: return
             
         radio_set = self.query_one("#media-type", RadioSet)
         is_tv = (radio_set.pressed_index == 0)
@@ -119,51 +141,167 @@ class VideoFetchModal(Screen):
         
         from ..metadata_video import search_videos
         results = search_videos(query, is_tv=is_tv, language=lang)
-        
-        self.app.call_from_thread(self._populate_results, results)
+        self.app.call_from_thread(self._populate_series, results, is_tv)
 
-    def _populate_results(self, results: list[dict]) -> None:
-        self._results = results
-        table = self.query_one("#result-list", DataTable)
+    def _populate_series(self, results: list[dict], is_tv: bool) -> None:
+        self._series_results = results
+        table = self.query_one("#series-list", DataTable)
         table.clear()
         for i, res in enumerate(results):
-            table.add_row(res["title"], res["year"], res["overview"] or "", key=str(i))
+            table.add_row(res["title"], res["year"], key=str(i))
+        
+        # Clear children
+        self.query_one("#season-list", DataTable).clear()
+        self.query_one("#episode-list", DataTable).clear()
+        self._season_results = []
+        self._episode_results = []
         
         if results:
             table.move_cursor(row=0)
             table.focus()
-            self.app.notify(f"Found {len(results)} matches")
+            self._update_preview(results[0]["overview"])
+            if is_tv:
+                table_lang = self.query_one("#lang-list", DataTable)
+                lang = self._langs[table_lang.cursor_row][0]
+                self._fetch_seasons_deferred(results[0]["id"], lang)
         else:
             self.app.notify("No matches found", severity="warning")
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.control.id == "result-list":
+    def _update_preview(self, text: str) -> None:
+        preview = self.query_one("#preview-text", Label)
+        preview.update(text or "(No overview)")
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if event.control.id == "series-list":
             idx = int(str(event.row_key.value))
-            res = self._results[idx]
+            res = self._series_results[idx]
+            self._update_preview(res["overview"])
             
             radio_set = self.query_one("#media-type", RadioSet)
-            is_tv = (radio_set.pressed_index == 0)
+            if radio_set.pressed_index == 0: # TV
+                # Pass data to worker
+                table_lang = self.query_one("#lang-list", DataTable)
+                lang = self._langs[table_lang.cursor_row][0]
+                self._fetch_seasons_deferred(res["id"], lang)
+        
+        elif event.control.id == "season-list":
+            idx = int(str(event.row_key.value))
+            res = self._season_results[idx]
+            self._update_preview(res["overview"])
             
+            t_series = self.query_one("#series-list", DataTable)
+            series_row_key = t_series.coordinate_to_cell_key(Coordinate(t_series.cursor_row, 0)).row_key
+            series_idx = int(str(series_row_key.value))
+            series_id = self._series_results[series_idx]["id"]
             table_lang = self.query_one("#lang-list", DataTable)
             lang = self._langs[table_lang.cursor_row][0]
+            self._fetch_episodes_deferred(series_id, res["season_number"], lang)
             
-            # Get S/E if provided
-            try:
-                s_val = self.query_one("#fetch-season", Input).value
-                e_val = self.query_one("#fetch-episode", Input).value
-                season = int(s_val) if s_val else None
-                episode = int(e_val) if e_val else None
-            except ValueError:
-                season = episode = None
+        elif event.control.id == "episode-list":
+            idx = int(str(event.row_key.value))
+            res = self._episode_results[idx]
+            self._update_preview(res["overview"])
 
+    @work(thread=True, exclusive=True)
+    def _fetch_seasons_deferred(self, series_id: int, lang: str) -> None:
+        import time
+        time.sleep(0.3)
+        from ..metadata_video import fetch_tv_seasons
+        seasons = fetch_tv_seasons(series_id, language=lang)
+        self.app.call_from_thread(self._populate_seasons, seasons)
+
+    def _populate_seasons(self, seasons: list[dict]) -> None:
+        self._season_results = seasons
+        table = self.query_one("#season-list", DataTable)
+        table.clear()
+        
+        target_row = 0
+        for i, s in enumerate(seasons):
+            table.add_row(f"{s['name']} ({s['air_date']})", key=str(i))
+            if self.target_season is not None and s['season_number'] == self.target_season:
+                target_row = i
+        
+        if seasons:
+            table.move_cursor(row=target_row)
+            # Fetch episodes for first season
+            t_series = self.query_one("#series-list", DataTable)
+            series_row_key = t_series.coordinate_to_cell_key(Coordinate(t_series.cursor_row, 0)).row_key
+            series_idx = int(str(series_row_key.value))
+            series_id = self._series_results[series_idx]["id"]
+            table_lang = self.query_one("#lang-list", DataTable)
+            lang = self._langs[table_lang.cursor_row][0]
+            self._fetch_episodes_deferred(series_id, seasons[target_row]["season_number"], lang)
+        else:
+            self.query_one("#episode-list", DataTable).clear()
+
+    @work(thread=True, exclusive=True)
+    def _fetch_episodes_deferred(self, series_id: int, season_num: int, lang: str) -> None:
+        import time
+        time.sleep(0.3)
+        from ..metadata_video import fetch_tv_episodes
+        episodes = fetch_tv_episodes(series_id, season_num, language=lang)
+        self.app.call_from_thread(self._populate_episodes, episodes)
+
+    def _populate_episodes(self, episodes: list[dict]) -> None:
+        self._episode_results = episodes
+        table = self.query_one("#episode-list", DataTable)
+        table.clear()
+        
+        target_row = 0
+        for i, e in enumerate(episodes):
+            table.add_row(str(e['episode_number']), e['name'], e['air_date'], key=str(i))
+            if self.target_episode is not None and e['episode_number'] == self.target_episode:
+                target_row = i
+        
+        if episodes:
+            table.move_cursor(row=target_row)
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        radio_set = self.query_one("#media-type", RadioSet)
+        is_tv = (radio_set.pressed_index == 0)
+        table_lang = self.query_one("#lang-list", DataTable)
+        lang = self._langs[table_lang.cursor_row][0]
+
+        t_series = self.query_one("#series-list", DataTable)
+        if t_series.cursor_row < 0: return
+        series_row_key = t_series.coordinate_to_cell_key(Coordinate(t_series.cursor_row, 0)).row_key
+        series_idx = int(str(series_row_key.value))
+        series_id = self._series_results[series_idx]["id"]
+
+        if not is_tv:
+            # Movie selected
             self.dismiss({
-                "tmdb_id": res["id"],
-                "is_tv": is_tv,
+                "tmdb_id": series_id,
+                "is_tv": False,
                 "language": lang,
                 "query": self.query_one("#search-query", Input).value,
-                "season": season,
-                "episode": episode
+                "season": None,
+                "episode": None
             })
+            return
+
+        # TV Show: Check where Enter was pressed
+        if event.control.id == "episode-list":
+            # Fully selected E
+            season_idx = self.query_one("#season-list", DataTable).cursor_row
+            season_num = self._season_results[season_idx]["season_number"]
+            ep_idx = int(str(event.row_key.value))
+            ep_num = self._episode_results[ep_idx]["episode_number"]
+            
+            self.dismiss({
+                "tmdb_id": series_id,
+                "is_tv": True,
+                "language": lang,
+                "query": self.query_one("#search-query", Input).value,
+                "season": season_num,
+                "episode": ep_num
+            })
+        elif event.control.id == "series-list":
+            # Go to Season list
+            self.query_one("#season-list").focus()
+        elif event.control.id == "season-list":
+            # Go to Episode list
+            self.query_one("#episode-list").focus()
 
 class VideoScanChoiceModal(Screen):
     DEFAULT_CSS = """

@@ -1,4 +1,4 @@
-from tmdbv3api import TMDb, Movie, TV, Episode
+from tmdbv3api import TMDb, Movie, TV, Season, Episode
 import logging
 import os
 
@@ -19,8 +19,34 @@ def _setup_tmdb():
 
 _setup_tmdb()
 
+import requests
+from pathlib import Path
+
+def download_video_poster(url: str, target_dir: Path, name: str) -> str | None:
+    """Download video poster and return local path."""
+    if not url: return None
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        # Use a hash or ID for filename to avoid collisions
+        import hashlib
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        target_path = target_dir / f"{name}_{url_hash}.jpg"
+        
+        if target_path.exists():
+            return str(target_path)
+            
+        logger.info(f"Downloading video poster: {url}")
+        response = requests.get(url, timeout=15)
+        if response.status_code == 200:
+            with open(target_path, "wb") as f:
+                f.write(response.content)
+            return str(target_path)
+    except Exception as e:
+        logger.error(f"Failed to download video poster: {e}")
+    return None
+
 def search_videos(title: str, is_tv=False, language: str = "ja"):
-    """Search for video candidates on TMDB."""
+    """Search for video candidates on TMDB (Series or Movie)."""
     logger.info(f"--- TMDB Search List: '{title}' (is_tv={is_tv}, lang={language}) ---")
     if not tmdb.api_key or tmdb.api_key == "YOUR_API_KEY":
         return []
@@ -53,109 +79,143 @@ def search_videos(title: str, is_tv=False, language: str = "ja"):
         logger.error(f"TMDB search failed: {e}")
     return results
 
+def fetch_tv_seasons(tmdb_id: int, language: str = "ja"):
+    """Fetch all seasons for a TV series."""
+    tmdb.language = language
+    try:
+        tv = TV()
+        show = tv.details(tmdb_id)
+        seasons = []
+        if hasattr(show, 'seasons'):
+            for s in show.seasons:
+                seasons.append({
+                    "season_number": s.season_number,
+                    "name": s.name,
+                    "air_date": s.air_date[:4] if getattr(s, 'air_date', None) else "?",
+                    "overview": s.overview
+                })
+        return seasons
+    except Exception as e:
+        logger.error(f"Failed to fetch seasons: {e}")
+        return []
+
+def fetch_tv_episodes(tmdb_id: int, season_number: int, language: str = "ja"):
+    """Fetch all episodes for a TV season."""
+    tmdb.language = language
+    try:
+        season_api = Season()
+        season_details = season_api.details(tmdb_id, season_number)
+        episodes = []
+        if hasattr(season_details, 'episodes'):
+            for e in season_details.episodes:
+                episodes.append({
+                    "episode_number": e.episode_number,
+                    "name": e.name,
+                    "air_date": e.air_date if getattr(e, 'air_date', None) else "?",
+                    "overview": e.overview,
+                    "still_path": f"https://image.tmdb.org/t/p/w500{e.still_path}" if getattr(e, 'still_path', None) else None
+                })
+        return episodes
+    except Exception as e:
+        logger.error(f"Failed to fetch episodes: {e}")
+        return []
+
 def fetch_video_details_by_id(tmdb_id: int, is_tv=False, language: str = "ja", season: int = None, episode: int = None):
-    """Fetch details for a specific TMDB ID, optionally for a specific season or episode."""
+    """Fetch unified metadata details by TMDB ID, with optional S/E."""
     logger.info(f"--- TMDB Fetch Details: ID={tmdb_id} (is_tv={is_tv}, lang={language}, S={season}, E={episode}) ---")
     tmdb.language = language
     try:
         if is_tv:
             tv = TV()
-            show = tv.details(tmdb_id)
+            show = tv.details(tmdb_id, append_to_response="credits")
             
-            # Default to series info
+            first_air = getattr(show, 'first_air_date', None)
+            
+            # Series base info
             res = {
-                "synopsis": show.overview,
-                "poster_path": f"https://image.tmdb.org/t/p/w500{show.poster_path}" if show.poster_path else None,
-                "cast": ", ".join([c.name for c in show.credits.cast[:5]]) if hasattr(show, 'credits') else None,
-                "year": int(show.first_air_date[:4]) if getattr(show, 'first_air_date', None) else None,
-                "title": show.name
+                "type": "TV Show",
+                "series": getattr(show, 'name', 'Unknown'),
+                "series_overview": getattr(show, 'overview', ''),
+                "first_air_date": first_air,
+                "series_poster_path": f"https://image.tmdb.org/t/p/w500{show.poster_path}" if getattr(show, 'poster_path', None) else None,
+                "poster_path": f"https://image.tmdb.org/t/p/w500{show.poster_path}" if getattr(show, 'poster_path', None) else None,
+                "genres": ", ".join([g['name'] for g in show.genres]) if hasattr(show, 'genres') and show.genres else None,
+                "year": int(first_air[:4]) if first_air and len(first_air) >= 4 else None,
+                "air_date": first_air,
+                "title": getattr(show, 'name', 'Unknown'),
+                "synopsis": getattr(show, 'overview', '')
             }
+            
+            # Cast safety
+            credits = getattr(show, 'credits', None)
+            if credits:
+                cast = getattr(credits, 'cast', None)
+                if isinstance(cast, list):
+                    res["cast"] = ", ".join([c.name for c in cast[:10]])
 
-            # If Season and Episode are provided, try to get episode details
+            # If Season is provided
+            if season is not None:
+                try:
+                    season_api = Season()
+                    s_details = season_api.details(tmdb_id, season)
+                    if s_details:
+                        res["season_name"] = getattr(s_details, 'name', None)
+                        res["season_overview"] = getattr(s_details, 'overview', None)
+                        if getattr(s_details, 'poster_path', None):
+                            res["poster_path"] = f"https://image.tmdb.org/t/p/w500{s_details.poster_path}"
+                except Exception as e:
+                    logger.warning(f"Could not fetch season {season} details: {e}")
+
+            # If Episode is provided
             if season is not None and episode is not None:
                 try:
                     ep_api = Episode()
                     ep_details = ep_api.details(tmdb_id, season, episode)
                     if ep_details:
-                        res["title"] = f"{show.name} - {ep_details.name}" if ep_details.name else show.name
-                        if ep_details.overview:
-                            res["synopsis"] = ep_details.overview
+                        res["title"] = getattr(ep_details, 'name', res["series"])
+                        res["synopsis"] = getattr(ep_details, 'overview', res["series_overview"])
+                        res["episode_overview"] = getattr(ep_details, 'overview', '')
+                        res["air_date"] = getattr(ep_details, 'air_date', res["first_air_date"])
+                        if getattr(ep_details, 'still_path', None):
+                            res["still_path"] = f"https://image.tmdb.org/t/p/w500{ep_details.still_path}"
                         logger.info(f"Episode found: {res['title']}")
                 except Exception as e:
-                    logger.warning(f"Could not fetch episode {season}E{episode}: {e}")
-            
-            # If only Season is provided, maybe update synopsis if season has one
-            elif season is not None:
-                try:
-                    # TMDB also has Season details if needed, but for now we'll stick to this
-                    pass
-                except Exception:
-                    pass
+                    logger.warning(f"Could not fetch episode {season}E{episode} details: {e}")
             
             return res
         else:
             movie = Movie()
-            m = movie.details(tmdb_id)
+            m = movie.details(tmdb_id, append_to_response="credits")
+            rel_date = getattr(m, 'release_date', None)
             res = {
-                "synopsis": m.overview,
-                "poster_path": f"https://image.tmdb.org/t/p/w500{m.poster_path}" if m.poster_path else None,
-                "cast": ", ".join([c.name for c in m.credits.cast[:5]]) if hasattr(m, 'credits') else None,
-                "director": ", ".join([c.name for c in m.credits.crew if c.job == 'Director']) if hasattr(m, 'credits') else None,
-                "year": int(m.release_date[:4]) if getattr(m, 'release_date', None) else None,
-                "title": m.title
+                "type": "Movie",
+                "title": getattr(m, 'title', 'Unknown'),
+                "synopsis": getattr(m, 'overview', ''),
+                "air_date": rel_date,
+                "poster_path": f"https://image.tmdb.org/t/p/w500{m.poster_path}" if getattr(m, 'poster_path', None) else None,
+                "year": int(rel_date[:4]) if rel_date and len(rel_date) >= 4 else None,
+                "genres": ", ".join([g['name'] for g in m.genres]) if hasattr(m, 'genres') and m.genres else None
             }
+            # Credits safety
+            credits = getattr(m, 'credits', None)
+            if credits:
+                cast = getattr(credits, 'cast', None)
+                if isinstance(cast, list):
+                    res["cast"] = ", ".join([c.name for c in cast[:10]])
+                
+                crew = getattr(credits, 'crew', None)
+                if isinstance(crew, list):
+                    res["director"] = ", ".join([c.name for c in crew if getattr(c, 'job', '') == 'Director'])
             return res
     except Exception as e:
-        logger.error(f"TMDB fetch details failed: {e}")
+        logger.error(f"TMDB fetch details failed: {e}", exc_info=True)
     return None
 
 def fetch_video_metadata(title: str, is_tv=False, language: str = "ja"):
-    """Fetch video info from TMDB."""
-    logger.info(f"--- TMDB Fetch Start: '{title}' (is_tv={is_tv}, lang={language}) ---")
-    if not tmdb.api_key or tmdb.api_key == "YOUR_API_KEY":
-        logger.error("TMDB API Key is missing or invalid.")
-        return None
-    
-    # Store original language to restore later if needed, 
-    # but tmdb instance is shared, so let's just set it.
-    tmdb.language = language
-        
-    try:
-        if is_tv:
-            tv = TV()
-            logger.info(f"Searching TV shows for: '{title}'...")
-            search_results = tv.search(title)
-            if search_results:
-                logger.info(f"Match found! Total results: {len(search_results)}. Using best match: ID={search_results[0].id}, Name='{search_results[0].name}'")
-                show = tv.details(search_results[0].id)
-                res = {
-                    "synopsis": show.overview,
-                    "poster_path": f"https://image.tmdb.org/t/p/w500{show.poster_path}" if show.poster_path else None,
-                    "cast": ", ".join([c.name for c in show.credits.cast[:5]]) if hasattr(show, 'credits') else None,
-                    "year": int(show.first_air_date[:4]) if getattr(show, 'first_air_date', None) else None
-                }
-                logger.info(f"Fetched TV metadata: {res}")
-                return res
-            else:
-                logger.warning(f"No TV show matches found for: '{title}'")
-        else:
-            movie = Movie()
-            logger.info(f"Searching movies for: '{title}'...")
-            search_results = movie.search(title)
-            if search_results:
-                logger.info(f"Match found! Total results: {len(search_results)}. Using best match: ID={search_results[0].id}, Title='{search_results[0].title}'")
-                m = movie.details(search_results[0].id)
-                res = {
-                    "synopsis": m.overview,
-                    "poster_path": f"https://image.tmdb.org/t/p/w500{m.poster_path}" if m.poster_path else None,
-                    "cast": ", ".join([c.name for c in m.credits.cast[:5]]) if hasattr(m, 'credits') else None,
-                    "director": ", ".join([c.name for c in m.credits.crew if c.job == 'Director']) if hasattr(m, 'credits') else None,
-                    "year": int(m.release_date[:4]) if getattr(m, 'release_date', None) else None
-                }
-                logger.info(f"Fetched Movie metadata: {res}")
-                return res
-            else:
-                logger.warning(f"No movie matches found for: '{title}'")
-    except Exception as e:
-        logger.error(f"TMDB fetch failed with exception: {e}")
+    """Fetch video info from TMDB (Legacy/Auto-fetch)."""
+    # This is still used by background scanner, but might need update or deprecation
+    # For now, keep it simple using fetch_video_details_by_id logic
+    results = search_videos(title, is_tv=is_tv, language=language)
+    if results:
+        return fetch_video_details_by_id(results[0]["id"], is_tv=is_tv, language=language)
     return None
