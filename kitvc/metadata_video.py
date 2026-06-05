@@ -79,6 +79,14 @@ def search_videos(title: str, is_tv=False, language: str = "ja"):
         logger.error(f"TMDB search failed: {e}")
     return results
 
+def search_movie_exact(title: str, language: str = "ja"):
+    """Search for a movie and return result ONLY if title matches exactly."""
+    results = search_videos(title, is_tv=False, language=language)
+    for r in results:
+        if r["title"].strip().lower() == title.strip().lower():
+            return r
+    return None
+
 def fetch_tv_seasons(tmdb_id: int, language: str = "ja"):
     """Fetch all seasons for a TV series."""
     tmdb.language = language
@@ -133,6 +141,9 @@ def fetch_video_details_by_id(tmdb_id: int, is_tv=False, language: str = "ja", s
             
             # Series base info
             res = {
+                "tmdb_id": tmdb_id,
+                "is_tv": True,
+                "language": language,
                 "type": "TV Show",
                 "series": getattr(show, 'name', 'Unknown'),
                 "series_overview": getattr(show, 'overview', ''),
@@ -188,6 +199,9 @@ def fetch_video_details_by_id(tmdb_id: int, is_tv=False, language: str = "ja", s
             m = movie.details(tmdb_id, append_to_response="credits")
             rel_date = getattr(m, 'release_date', None)
             res = {
+                "tmdb_id": tmdb_id,
+                "is_tv": False,
+                "language": language,
                 "type": "Movie",
                 "title": getattr(m, 'title', 'Unknown'),
                 "synopsis": getattr(m, 'overview', ''),

@@ -39,6 +39,8 @@ def init_db():
                 bpm REAL,
                 duration INTEGER,
                 last_pos REAL DEFAULT 0,
+                last_played_at REAL,
+                created_at REAL DEFAULT (strftime('%s','now')),
                 album_id INTEGER,
                 FOREIGN KEY(album_id) REFERENCES music_albums(id)
             )
@@ -58,6 +60,8 @@ def init_db():
                 title TEXT,
                 duration INTEGER DEFAULT 0,
                 last_pos REAL DEFAULT 0,
+                last_played_at REAL,
+                created_at REAL DEFAULT (strftime('%s','now')),
                 thumbnail_path TEXT,
                 synopsis TEXT,
                 cast TEXT,
@@ -79,6 +83,16 @@ def init_db():
                 local_still_path TEXT
             )
         """)
+        
+        # Migration: Add last_played_at and created_at if they don't exist
+        for table in ["music_tracks", "video_files"]:
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN last_played_at REAL")
+            except sqlite3.OperationalError: pass
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN created_at REAL DEFAULT (strftime('%s','now'))")
+            except sqlite3.OperationalError: pass
+
         # Separate Playlist tables for Music and Video
         conn.execute("""
             CREATE TABLE IF NOT EXISTS music_playlists (
@@ -108,6 +122,23 @@ def init_db():
                 FOREIGN KEY(playlist_id) REFERENCES video_playlists(id) ON DELETE CASCADE
             )
         """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS video_filters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE,
+                conditions_json TEXT,
+                sort_json TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS music_filters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE,
+                conditions_json TEXT,
+                sort_json TEXT
+            )
+        """)
         
         # Migration: Add missing columns if they don't exist
         for table, cols in {
@@ -124,13 +155,21 @@ def init_db():
                 ("genres", "TEXT"), ("season_name", "TEXT"),
                 ("season_overview", "TEXT"), ("still_path", "TEXT"),
                 ("episode_overview", "TEXT"), ("local_poster_path", "TEXT"),
-                ("local_series_poster_path", "TEXT"), ("local_still_path", "TEXT")
+                ("local_series_poster_path", "TEXT"), ("local_still_path", "TEXT"),
+                ("created_at", "DATETIME"),
+                ("subcategory", "TEXT")
             ]
         }.items():
             existing_cols = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
             for col_name, col_type in cols:
                 if col_name not in existing_cols:
+                    # SQLite doesn't allow non-constant defaults (like CURRENT_TIMESTAMP) 
+                    # in ALTER TABLE ADD COLUMN. Add as simple type first.
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                    
+                    # Ensure created_at is populated for existing rows
+                    if table == "video_files" and col_name == "created_at":
+                        conn.execute("UPDATE video_files SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL")
 
         # Special migration for music_tracks: copy year to release_date if year exists and release_date is empty
         existing_cols = [row["name"] for row in conn.execute("PRAGMA table_info(music_tracks)").fetchall()]
@@ -247,10 +286,11 @@ def get_playlist_tracks(playlist_id):
     # Compatibility wrapper for existing music logic
     return get_playlist_items(playlist_id, is_video=False)
 
-def save_playback_position(path, pos, is_video=False):
+def save_playback_position(path: str, position: float, is_video: bool = False):
     table = "video_files" if is_video else "music_tracks"
     with get_connection() as conn:
-        conn.execute(f"UPDATE {table} SET last_pos = ? WHERE path = ?", (pos, path))
+        conn.execute(f"UPDATE {table} SET last_pos = ?, last_played_at = (strftime('%s','now')) WHERE path = ?", (position, path))
+
 
 def get_playback_position(path, is_video=False):
     table = "video_files" if is_video else "music_tracks"
@@ -384,9 +424,9 @@ def update_video_file(video_data):
             conn.execute("""
                 INSERT INTO video_files (
                     path, mtime, filename, size, duration,
-                    series, season, episode, thumbnail_path
+                    series, season, episode, thumbnail_path, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """, (
                 video_data["path"], video_data["mtime"], video_data["filename"], 
                 video_data["size"], video_data.get("duration", 0), meta.get("series"), 
@@ -396,7 +436,7 @@ def update_video_file(video_data):
 def update_video_manual_fields(path, fields):
     # fields is a dict of metadata fields
     allowed = {
-        "type", "category", "series", "season", "episode", "title",
+        "type", "category", "subcategory", "series", "season", "episode", "title",
         "synopsis", "cast", "director", "year", "tmdb_id", "poster_path",
         "air_date", "series_overview", "first_air_date", "series_poster_path",
         "genres", "season_name", "season_overview", "still_path",
@@ -442,6 +482,172 @@ def rename_playlist(playlist_id, new_name, is_video=False):
     table = "video_playlists" if is_video else "music_playlists"
     with get_connection() as conn:
         conn.execute(f"UPDATE {table} SET name = ? WHERE id = ?", (new_name, playlist_id))
+
+# Video Filters (Saved Views)
+def get_video_filters():
+    with get_connection() as conn:
+        return [dict(row) for row in conn.execute("SELECT * FROM video_filters ORDER BY name").fetchall()]
+
+def create_video_filter(name, conditions_json="[]", sort_json="[]"):
+    with get_connection() as conn:
+        conn.execute("INSERT OR IGNORE INTO video_filters (name, conditions_json, sort_json) VALUES (?, ?, ?)", 
+                     (name, conditions_json, sort_json))
+
+def update_video_filter(filter_id, name=None, conditions_json=None, sort_json=None):
+    with get_connection() as conn:
+        if name is not None:
+            conn.execute("UPDATE video_filters SET name = ? WHERE id = ?", (name, filter_id))
+        if conditions_json is not None:
+            conn.execute("UPDATE video_filters SET conditions_json = ? WHERE id = ?", (conditions_json, filter_id))
+        if sort_json is not None:
+            conn.execute("UPDATE video_filters SET sort_json = ? WHERE id = ?", (sort_json, filter_id))
+
+def delete_video_filter(filter_id):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM video_filters WHERE id = ?", (filter_id,))
+
+# Music Filters
+def get_music_filters():
+    with get_connection() as conn:
+        return [dict(row) for row in conn.execute("SELECT * FROM music_filters ORDER BY name").fetchall()]
+
+def create_music_filter(name, conditions_json="[]", sort_json="[]"):
+    with get_connection() as conn:
+        conn.execute("INSERT OR IGNORE INTO music_filters (name, conditions_json, sort_json) VALUES (?, ?, ?)",
+                     (name, conditions_json, sort_json))
+
+def update_music_filter(filter_id, name=None, conditions_json=None, sort_json=None):
+    with get_connection() as conn:
+        if name is not None:
+            conn.execute("UPDATE music_filters SET name = ? WHERE id = ?", (name, filter_id))
+        if conditions_json is not None:
+            conn.execute("UPDATE music_filters SET conditions_json = ? WHERE id = ?", (conditions_json, filter_id))
+        if sort_json is not None:
+            conn.execute("UPDATE music_filters SET sort_json = ? WHERE id = ?", (sort_json, filter_id))
+
+def delete_music_filter(filter_id):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM music_filters WHERE id = ?", (filter_id,))
+
+import json
+
+def get_filtered_videos(conditions_json: str, sort_json: str):
+    return _get_filtered_items("video_files", conditions_json, sort_json, "category, series, season, episode, title")
+
+def get_filtered_tracks(conditions_json: str, sort_json: str):
+    return _get_filtered_items("music_tracks", conditions_json, sort_json, "artist, album, disc_num, track_num, title")
+
+def _get_filtered_items(table: str, conditions_json: str, sort_json: str, default_sort: str):
+    try:
+        conditions = json.loads(conditions_json)
+        sort_fields = json.loads(sort_json)
+    except (json.JSONDecodeError, TypeError):
+        conditions = []
+        sort_fields = []
+
+    base_query = f"SELECT * FROM {table}"
+    where_clause, params = _build_where_clause(conditions)
+
+    query = base_query
+    if where_clause:
+        query += " WHERE " + where_clause
+
+    if sort_fields:
+        order_by = []
+        for item in sort_fields:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                field, direction = item
+            else:
+                field, direction = item, "ASC"
+
+            if field.replace("_", "").isalnum():
+                dir_str = "DESC" if str(direction).upper() == "DESC" else "ASC"
+                order_by.append(f"{field} COLLATE NOCASE {dir_str}")
+        if order_by:
+            query += " ORDER BY " + ", ".join(order_by)
+    else:
+        query += f" ORDER BY {default_sort}"
+
+    with get_connection() as conn:
+        return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+def _build_where_clause(rules_data):
+
+    """
+    Recursively builds WHERE clause.
+    rules_data can be a list (default AND) or a dict {"op": "and|or", "rules": [...]}.
+    """
+    if not rules_data:
+        return "", []
+
+    if isinstance(rules_data, list):
+        op = "AND"
+        rules = rules_data
+    elif isinstance(rules_data, dict):
+        op = rules_data.get("op", "AND").upper()
+        rules = rules_data.get("rules", [])
+    else:
+        return "", []
+
+    parts = []
+    all_params = []
+
+    for rule in rules:
+        if "op" in rule and "rules" in rule:
+            # Nested condition
+            sub_where, sub_params = _build_where_clause(rule)
+            if sub_where:
+                parts.append(f"({sub_where})")
+                all_params.extend(sub_params)
+        else:
+            # Leaf condition: {"field": "...", "op": "==", "value": "..."}
+            field = rule.get("field")
+            operator = rule.get("op", "==")
+            value = rule.get("value")
+
+            if not field or not field.replace("_", "").isalnum():
+                continue
+
+            sql_op = ""
+            param = value
+            
+            if operator == "==":
+                sql_op = "= ?"
+            elif operator == "!=":
+                sql_op = "!= ?"
+                # To include NULLs when checking for "not equal", we need OR field IS NULL
+                parts.append(f"({field} != ? OR {field} IS NULL)")
+                all_params.append(value)
+                continue
+            elif operator == "contains":
+                sql_op = "LIKE ?"
+                param = f"%{value}%"
+            elif operator == "not_contains":
+                sql_op = "NOT LIKE ?"
+                param = f"%{value}%"
+            elif operator == ">":
+                sql_op = "> ?"
+            elif operator == "<":
+                sql_op = "< ?"
+            elif operator == "is_null":
+                sql_op = "IS NULL"
+                param = None
+            elif operator == "is_not_null":
+                sql_op = "IS NOT NULL"
+                param = None
+            
+            if sql_op:
+                parts.append(f"{field} {sql_op}")
+                if param is not None:
+                    all_params.append(param)
+                elif "IS NULL" not in sql_op and "IS NOT NULL" not in sql_op:
+                    # Fallback for unexpected nulls
+                    all_params.append("")
+
+    if not parts:
+        return "", []
+
+    return f" {op} ".join(parts), all_params
 
 def remove_missing_files(current_paths, table):
     if not current_paths:

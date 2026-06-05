@@ -12,6 +12,7 @@ DEFAULT_CONFIG = {
     },
     "video": {
         "directories": [str(Path.home() / "Videos")],
+        "fullscreen": False,
     },
     "playlist": {
         "music_playlist_dir": "",

@@ -362,7 +362,12 @@ class VideoPlayer:
         if not is_healthy:
             if self.mpv:
                 await self.mpv.shutdown()
-            self.mpv = MpvInstance(VIDEO_SOCKET, self.config.get("player", {}).get("mpv_args", []))
+            
+            mpv_args = list(self.config.get("player", {}).get("mpv_args", []))
+            if self.config.get("video", {}).get("fullscreen", False):
+                mpv_args.append("--fullscreen")
+            
+            self.mpv = MpvInstance(VIDEO_SOCKET, mpv_args)
             self.mpv.on_event.append(self._handle_event)
             await self.mpv.start()
             await self.set_volume(self.volume)

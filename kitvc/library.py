@@ -435,9 +435,18 @@ class VideoLibrary:
             
             if meta:
                 updates = {}
-                for field in ["synopsis", "cast", "director", "year", "poster_path", "episode_overview"]:
-                    if meta.get(field):
+                for field in [
+                    "tmdb_id", "synopsis", "cast", "director", "year", "poster_path", 
+                    "type", "series", "series_overview", "first_air_date", 
+                    "series_poster_path", "genres", "air_date", "title",
+                    "season_name", "season_overview", "still_path", "episode_overview"
+                ]:
+                    if meta.get(field) is not None:
                         updates[field] = meta[field]
+                
+                # For auto-fetch, if season/episode were provided to enrichment, save them too
+                if season is not None: updates["season"] = season
+                if episode is not None: updates["episode"] = episode
                 
                 # Download poster
                 if meta.get("poster_path"):
@@ -467,6 +476,16 @@ class VideoLibrary:
         except Exception as e:
             logger.error(f"enrich_single_video failed for {video.get('filename')}: {e}")
 
+    def enrich_movie_by_exact_title(self, video: dict, language: str = "ja"):
+        """Search and enrich movie only if title matches exactly."""
+        title = video.get("title")
+        if not title: return
+        
+        from .metadata_video import search_movie_exact
+        match = search_movie_exact(title, language=language)
+        if match:
+            self.enrich_single_video_by_id(video, match["id"], is_tv=False, language=language)
+
     def enrich_single_video_by_id(self, video: dict, tmdb_id: int, is_tv: bool, language: str = "ja", season: int = None, episode: int = None):
         """Fetch metadata for a single video item by a specific TMDB ID, with optional S/E."""
         try:
@@ -475,7 +494,11 @@ class VideoLibrary:
             meta = fetch_video_details_by_id(tmdb_id, is_tv=is_tv, language=language, season=season, episode=episode)
             
             if meta:
-                updates = {}
+                updates = {
+                    "tmdb_id": tmdb_id,
+                    "season": season,
+                    "episode": episode
+                }
                 for field in [
                     "synopsis", "cast", "director", "year", "poster_path", 
                     "type", "series", "series_overview", "first_air_date", 

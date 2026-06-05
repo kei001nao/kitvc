@@ -3,7 +3,7 @@ from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Label, Input, Button, DataTable, Select, TextArea
-from textual.containers import Vertical, Horizontal
+from textual.containers import Vertical, Horizontal, VerticalScroll
 from ..database import get_connection, update_video_manual_fields
 from ..widgets.media_lists import VideoList
 from ..utils import ensure_local_image
@@ -72,6 +72,9 @@ class VideoLibraryScreen(Widget):
 
     def on_video_list_video_edit_requested(self, event: VideoList.VideoEditRequested) -> None:
         self.app.push_screen(VideoEditModal(event.video), callback=self._on_edit_finished)
+
+    def on_video_list_batch_edit_requested(self, event: VideoList.BatchEditRequested) -> None:
+        self.app.push_screen(VideoBatchEditModal(event.videos), callback=self._on_edit_finished)
 
     def _on_edit_finished(self, result: bool) -> None:
         if result:
@@ -169,6 +172,9 @@ class VideoCategoryScreen(Widget):
     def on_video_list_video_edit_requested(self, event: VideoList.VideoEditRequested) -> None:
         self.app.push_screen(VideoEditModal(event.video), callback=self._on_edit_finished)
 
+    def on_video_list_batch_edit_requested(self, event: VideoList.BatchEditRequested) -> None:
+        self.app.push_screen(VideoBatchEditModal(event.videos), callback=self._on_edit_finished)
+
     def _on_edit_finished(self, result: bool) -> None:
         if result:
             self._load()
@@ -178,6 +184,87 @@ class VideoCategoryScreen(Widget):
                 sidebar.refresh_tree()
             except Exception:
                 pass
+
+class VideoFilterScreen(Widget):
+    DEFAULT_CSS = """
+    VideoFilterScreen { height: 1fr; padding: 1 2; }
+    VideoFilterScreen #filter-heading { text-style: bold; margin-bottom: 1; }
+    VideoFilterScreen VideoList { border: solid $primary; }
+    """
+    def __init__(self, filter_id: int, filter_name: str, **kwargs):
+        super().__init__(**kwargs)
+        self.filter_id = filter_id
+        self.filter_name = filter_name
+
+    def compose(self) -> ComposeResult:
+        yield Label(f"View: {self.filter_name}", id="filter-heading")
+        yield Label("n: New View  |  e: Edit View  |  d: Delete View", classes="video-playlist-help")
+        yield VideoList(id="video-list")
+
+    def on_mount(self) -> None:
+        self._load()
+        self.set_interval(0.5, self._update_playback_status)
+
+    def _update_playback_status(self) -> None:
+        try:
+            vl = self.query_one("#video-list", VideoList)
+            track = self.app.video_player.get_current_track()
+            path = track["path"] if track else None
+            is_paused = self.app.video_player._paused
+            vl.set_current_index_by_path(path, is_paused)
+        except Exception:
+            pass
+
+    @work(thread=True)
+    def _load(self) -> None:
+        from ..database import get_connection, get_filtered_videos
+        with get_connection() as conn:
+            f = conn.execute("SELECT * FROM video_filters WHERE id = ?", (self.filter_id,)).fetchone()
+        
+        if f:
+            videos = get_filtered_videos(f["conditions_json"], f["sort_json"])
+        else:
+            videos = []
+        
+        self.app.call_from_thread(self._populate, videos)
+
+    def _populate(self, videos: list[dict]) -> None:
+        self.query_one(VideoList).load(videos)
+
+    def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
+        self.app.play_video(event.video, event.videos, event.index, resume=False)
+
+    def on_key(self, event) -> None:
+        if event.key == "p":
+            vl = self.query_one("#video-list", VideoList)
+            from textual.widgets import DataTable
+            try:
+                table = vl.query_one(DataTable)
+                if table.cursor_row is not None:
+                    row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+                    idx = int(str(row_key.value))
+                    video = vl._videos[idx]
+
+                    # If this video is already the current track, let global toggle_pause handle it
+                    curr = self.app.video_player.get_current_track()
+                    if curr and curr["path"] == video["path"] and self.app.video_player.mpv:
+                        return
+
+                    self.app.play_video(video, vl._videos, idx, resume=True)
+                    event.stop()
+                    return
+            except Exception:
+                pass
+
+    def on_video_list_video_edit_requested(self, event: VideoList.VideoEditRequested) -> None:
+        self.app.push_screen(VideoEditModal(event.video), callback=self._on_edit_finished)
+
+    def on_video_list_batch_edit_requested(self, event: VideoList.BatchEditRequested) -> None:
+        self.app.push_screen(VideoBatchEditModal(event.videos), callback=self._on_edit_finished)
+
+    def _on_edit_finished(self, result: bool) -> None:
+        if result:
+            self._load()
 
 class VideoPlaylistScreen(Widget):
     DEFAULT_CSS = """
@@ -381,6 +468,242 @@ class VideoPlaylistScreen(Widget):
     def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
         self.app.play_video(event.video, event.videos, event.index, resume=False)
 
+class VideoHealthScreen(Widget):
+    DEFAULT_CSS = """
+    VideoHealthScreen { height: 1fr; padding: 1 2; }
+    VideoHealthScreen #health-heading { text-style: bold; margin-bottom: 1; }
+    VideoHealthScreen VideoList { border: solid $primary; }
+    """
+    def compose(self) -> ComposeResult:
+        yield Label("Metadata Health Check (Missing Synopsis/Year)", id="health-heading")
+        yield Label("s: Batch Scan Marked Items", classes="video-playlist-help")
+        yield VideoList(id="video-list")
+
+    def on_mount(self) -> None:
+        self._load()
+
+    @work(thread=True)
+    def _load(self) -> None:
+        from ..database import get_connection
+        with get_connection() as conn:
+            videos = [dict(row) for row in conn.execute(
+                "SELECT * FROM video_files WHERE synopsis IS NULL OR year IS NULL ORDER BY category, series, season, episode, title"
+            ).fetchall()]
+        self.app.call_from_thread(self._populate, videos)
+
+    def _populate(self, videos: list[dict]) -> None:
+        self.query_one(VideoList).load(videos)
+
+    def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
+        self.app.play_video(event.video, event.videos, event.index, resume=False)
+
+    def on_video_list_video_edit_requested(self, event: VideoList.VideoEditRequested) -> None:
+        self.app.push_screen(VideoEditModal(event.video), callback=self._on_edit_finished)
+
+    def on_video_list_batch_edit_requested(self, event: VideoList.BatchEditRequested) -> None:
+        self.app.push_screen(VideoBatchEditModal(event.videos), callback=self._on_edit_finished)
+
+    def _on_edit_finished(self, result: bool) -> None:
+        if result:
+            self._load()
+
+class VideoContinueScreen(Widget):
+    DEFAULT_CSS = """
+    VideoContinueScreen { height: 1fr; padding: 1 2; }
+    VideoContinueScreen #continue-heading { text-style: bold; margin-bottom: 1; }
+    VideoContinueScreen VideoList { border: solid $primary; }
+    """
+    def compose(self) -> ComposeResult:
+        yield Label("Continue Watching", id="continue-heading")
+        yield VideoList(id="video-list")
+
+    def on_mount(self) -> None:
+        self._load()
+        self.set_interval(0.5, self._update_playback_status)
+
+    def _update_playback_status(self) -> None:
+        try:
+            vl = self.query_one("#video-list", VideoList)
+            track = self.app.video_player.get_current_track()
+            path = track["path"] if track else None
+            is_paused = self.app.video_player._paused
+            vl.set_current_index_by_path(path, is_paused)
+        except Exception: pass
+
+    @work(thread=True)
+    def _load(self) -> None:
+        from ..database import get_connection
+        with get_connection() as conn:
+            # last_pos > 0 AND last_played_at IS NOT NULL
+            videos = [dict(row) for row in conn.execute(
+                "SELECT * FROM video_files WHERE last_pos > 0 AND last_played_at IS NOT NULL ORDER BY last_played_at DESC LIMIT 50"
+            ).fetchall()]
+        self.app.call_from_thread(self._populate, videos)
+
+    def _populate(self, videos: list[dict]) -> None:
+        self.query_one(VideoList).load(videos)
+
+    def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
+        self.app.play_video(event.video, event.videos, event.index, resume=True)
+
+    def on_video_list_video_edit_requested(self, event: VideoList.VideoEditRequested) -> None:
+        self.app.push_screen(VideoEditModal(event.video), callback=self._on_edit_finished)
+
+    def on_video_list_batch_edit_requested(self, event: VideoList.BatchEditRequested) -> None:
+        self.app.push_screen(VideoBatchEditModal(event.videos), callback=self._on_edit_finished)
+
+    def _on_edit_finished(self, result: bool) -> None:
+        if result:
+            self._load()
+
+class VideoRecentScreen(Widget):
+    DEFAULT_CSS = """
+    VideoRecentScreen { height: 1fr; padding: 1 2; }
+    VideoRecentScreen #recent-heading { text-style: bold; margin-bottom: 1; }
+    VideoRecentScreen VideoList { border: solid $primary; }
+    """
+    def compose(self) -> ComposeResult:
+        yield Label("Recently Added Videos", id="recent-heading")
+        yield VideoList(id="video-list")
+
+    def on_mount(self) -> None:
+        self._load()
+        self.set_interval(0.5, self._update_playback_status)
+
+    def _update_playback_status(self) -> None:
+        try:
+            vl = self.query_one("#video-list", VideoList)
+            track = self.app.video_player.get_current_track()
+            path = track["path"] if track else None
+            is_paused = self.app.video_player._paused
+            vl.set_current_index_by_path(path, is_paused)
+        except Exception: pass
+
+    @work(thread=True)
+    def _load(self) -> None:
+        from ..database import get_connection
+        with get_connection() as conn:
+            videos = [dict(row) for row in conn.execute(
+                "SELECT * FROM video_files ORDER BY created_at DESC LIMIT 50"
+            ).fetchall()]
+        self.app.call_from_thread(self._populate, videos)
+
+    def _populate(self, videos: list[dict]) -> None:
+        self.query_one(VideoList).load(videos)
+
+    def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
+        self.app.play_video(event.video, event.videos, event.index, resume=False)
+
+    def on_video_list_video_edit_requested(self, event: VideoList.VideoEditRequested) -> None:
+        self.app.push_screen(VideoEditModal(event.video), callback=self._on_edit_finished)
+
+    def on_video_list_batch_edit_requested(self, event: VideoList.BatchEditRequested) -> None:
+        self.app.push_screen(VideoBatchEditModal(event.videos), callback=self._on_edit_finished)
+
+    def _on_edit_finished(self, result: bool) -> None:
+        if result:
+            self._load()
+
+class VideoBatchEditModal(Screen):
+    DEFAULT_CSS = """
+    VideoBatchEditModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.5);
+    }
+    #batch-edit-container {
+        width: 70;
+        height: auto;
+        max-height: 90%;
+        border: panel $primary;
+        background: $surface;
+        padding: 1;
+    }
+    #batch-edit-container Label { margin-top: 1; text-style: bold; }
+    #batch-edit-container Button { margin-top: 2; width: 100%; }
+    #batch-edit-container Input { margin-bottom: 0; border: none; background: $accent 10%; padding: 0 1; height: 1; }
+    #batch-edit-container Select { margin-bottom: 0; }
+    .modal-help { text-align: center; color: $text-muted; margin-top: 1; height: 1; }
+    #batch-scroll { height: auto; max-height: 30; }
+    """
+
+    def __init__(self, videos: list[dict], **kwargs):
+        super().__init__(**kwargs)
+        self.videos = videos
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="batch-edit-container"):
+            yield Label(f"Batch Edit: {len(self.videos)} video(s)")
+            with VerticalScroll(id="batch-scroll"):
+                yield Label("Type:")
+                yield Select([("Keep", "Keep"), ("Movie", "Movie"), ("TV Show", "TV Show")], value="Keep", id="batch-type")
+                
+                yield Label("Category:")
+                yield Input(placeholder="Leave blank to keep current", id="batch-category")
+                
+                yield Label("SubCategory:")
+                yield Input(placeholder="Leave blank to keep current", id="batch-subcategory")
+
+                yield Label("Series:")
+                yield Input(placeholder="Leave blank to keep current", id="batch-series")
+
+                yield Label("Season:")
+                yield Input(placeholder="Leave blank to keep current (Number)", id="batch-season")
+
+            yield Button("Apply Changes", variant="primary", id="apply-btn")
+            yield Label("Ctrl+Enter: Save   ESC: Cancel", classes="modal-help")
+
+    def on_mount(self) -> None:
+        self.query_one("#batch-type").focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "apply-btn":
+            self._do_save()
+
+    def _do_save(self) -> None:
+        updates = {}
+        v_type = self.query_one("#batch-type", Select).value
+        if v_type != "Keep": updates["type"] = v_type
+        
+        cat = self.query_one("#batch-category", Input).value.strip()
+        if cat: updates["category"] = cat
+        
+        sub = self.query_one("#batch-subcategory", Input).value.strip()
+        if sub: updates["subcategory"] = sub
+        
+        series = self.query_one("#batch-series", Input).value.strip()
+        if series: updates["series"] = series
+        
+        season_val = self.query_one("#batch-season", Input).value.strip()
+        if season_val:
+            try:
+                updates["season"] = int(season_val)
+            except ValueError:
+                self.app.notify("Season must be a number", severity="error")
+                return
+        
+        if not updates:
+            self.app.notify("No changes specified", severity="warning")
+            return
+
+        self._apply(updates)
+
+    @work(thread=True)
+    def _apply(self, updates: dict) -> None:
+        from ..database import update_video_manual_fields
+        for v in self.videos:
+            update_video_manual_fields(v["path"], updates)
+        
+        self.app.call_from_thread(self.app.notify, f"Updated {len(self.videos)} video(s)")
+        self.app.call_from_thread(self.dismiss, True)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(False)
+            event.stop()
+        elif event.key in ("ctrl+enter", "ctrl+j", "ctrl+m"):
+            self._do_save()
+            event.stop()
+
 import unicodedata
 
 def get_display_width(text: str) -> int:
@@ -446,12 +769,11 @@ class VideoEditModal(Screen):
     #edit-container Input { height: 1; }
     #edit-container TextArea { height: 3; }
 
-    #edit-title, #edit-series, #edit-synopsis, #edit-genres, #edit-series-overview, #edit-episode-overview { width: 70; }
+    #edit-title, #edit-series, #edit-synopsis, #edit-genres, #edit-series-overview, #edit-episode-overview { width: 98%; margin-right: 4; }
     #edit-date { width: 14; }
     #edit-season, #edit-episode { width: 18; }
-    #edit-category { width: 34; }
-    #edit-genres { width: 34; }
-    #edit-type { width: 28; height: 5; border: none; background: $accent 10%; margin: 0; }
+    #edit-category, #edit-subcategory { width: 100%; }
+    #edit-type { width: 100%; height: 4; border: none; background: $accent 10%; margin: 0; }
 
     #edit-refresh-btn {
         margin: 1 0;
@@ -463,19 +785,20 @@ class VideoEditModal(Screen):
     }
 
     #edit-container Horizontal {
-        margin-top: 1;
         width: 100%;
         height: auto;
     }
-    #row-class { height: 14; margin-bottom: 0; }
-    #v-type { width: 32; height: auto; }
-
-    #v-cat-gen { width: 40; height: auto; }
+    #edit-scroll Vertical, #edit-scroll Horizontal {
+        height: auto;
+    }
+    #row-class { margin-bottom: 0; }
+    #v-type { width: 30; }
+    #v-cat-sub { width: 1fr; margin-left: 2; margin-right: 2; }
     
-    #row-date-se { height: 4; }
-    #v-date { width: 22; height: 4; }
-    #v-season { width: 14; height: 4; }
-    #v-episode { width: 14; height: 4; }
+    #row-date-se { margin-top: 1; }
+    #v-season { width: 14; }
+    #v-episode { width: 14; margin-left: 2; }
+    #v-date { width: 22; margin-left: 2; }
 
     .edit-help {
         width: 100%;
@@ -517,18 +840,21 @@ class VideoEditModal(Screen):
                 
                 yield Button("Search TMDB (Series/Season/Episode)", id="edit-refresh-btn")
 
-                # Grouping Classification (Type, Category, Genres)
+                # Classification Section (Type, Category, SubCategory)
                 with Horizontal(id="row-class"):
                     with Vertical(id="v-type"):
                         yield Label("Type")
                         yield Select([("Movie", "Movie"), ("TV Show", "TV Show")], 
                                     value=self.video.get("type") or "Movie", id="edit-type")
-                    with Vertical(id="v-cat-gen"):
+                    with Vertical(id="v-cat-sub"):
                         yield Label("Category")
                         cat_val = self.video.get("category") or getattr(self.app, "_last_video_category", "")
                         yield Input(value=cat_val or "", id="edit-category")
-                        yield Label("Genres")
-                        yield Input(value=self.video.get("genres") or "", id="edit-genres")
+                        yield Label("SubCategory")
+                        yield Input(value=self.video.get("subcategory") or "", id="edit-subcategory")
+
+                yield Label("Genres")
+                yield Input(value=self.video.get("genres") or "", id="edit-genres")
 
                 yield Label("Title (Episode Name for TV)")
                 yield Input(value=self.video.get("title") or "", id="edit-title")
@@ -609,7 +935,7 @@ class VideoEditModal(Screen):
         except ValueError:
             season = episode = None
             
-        self.app.show_video_fetch_dialog(query, is_tv_hint, handle_fetch_details, season=season, episode=episode)
+        self.app.show_video_fetch_dialog(query, is_tv_hint, handle_fetch_details, season=season, episode=episode, is_batch=False)
 
     @work(thread=True)
     def _do_refresh_info(self, details: dict) -> None:
@@ -670,6 +996,8 @@ class VideoEditModal(Screen):
             "series": ("#edit-series", Input),
             "air_date": ("#edit-date", Input),
             "genres": ("#edit-genres", Input),
+            "category": ("#edit-category", Input),
+            "subcategory": ("#edit-subcategory", Input),
             "season": ("#edit-season", Input),
             "episode": ("#edit-episode", Input),
             "synopsis": ("#edit-synopsis", TextArea),
@@ -729,6 +1057,7 @@ class VideoEditModal(Screen):
                 "season": int(self.query_one("#edit-season", Input).value or 0),
                 "episode": int(self.query_one("#edit-episode", Input).value or 0),
                 "category": clean(self.query_one("#edit-category", Input).value),
+                "subcategory": clean(self.query_one("#edit-subcategory", Input).value),
                 "type": str(self.query_one("#edit-type", Select).value or "Movie"),
                 "air_date": clean(self.query_one("#edit-date", Input).value),
                 "genres": clean(self.query_one("#edit-genres", Input).value),

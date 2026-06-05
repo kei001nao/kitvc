@@ -37,20 +37,28 @@ from .player import MpvInfo, MusicPlayer, VideoPlayer
 from .widgets.header import Header
 from .widgets.modals import QuitModal, ConfirmModal, FileSelectModal
 from .widgets.playback import PlaybackControl
-from .screens.music import MusicLibraryScreen, MusicArtistScreen, MusicPlaylistScreen, QueueScreen
-from .screens.video import VideoLibraryScreen, VideoCategoryScreen, VideoPlaylistScreen
+from .screens.music import MusicLibraryScreen, MusicArtistScreen, MusicPlaylistScreen, QueueScreen, MusicRecentScreen, MusicFilterScreen
+from .screens.video import VideoLibraryScreen, VideoCategoryScreen, VideoPlaylistScreen, VideoHealthScreen, VideoContinueScreen, VideoRecentScreen
 from textual_image.widget import Image
 
 LOGO = """█▄▀ █ ▀█▀ █ █ █▀
 █ █ █  █  ╚▄▀ █▄""".strip("\n")
 
 class Sidebar(Widget):
+    BINDINGS = [
+        Binding("n", "create_view", "New View"),
+        Binding("e", "edit_view", "Edit Selected View"),
+        Binding("d", "delete_view", "Delete Selected View"),
+    ]
     DEFAULT_CSS = """
     Sidebar {
         width: 44;
         height: 100%;
         padding: 1 0;
         background: $surface;
+    }
+    Sidebar:focus-within {
+        border-right: solid $accent;
     }
     Sidebar #app-title {
         height: auto;
@@ -89,10 +97,16 @@ class Sidebar(Widget):
         music = tree.root.add("Music", data="music_root", expand=True)
         music.add_leaf("Queue", data="music_queue")
         music.add("Library", data="music_library")
+        music.add("Views", data="music_filters")
+        music.add_leaf("Recently Added", data="music_recent")
         music.add_leaf("PlayLists", data="music_playlists")
         
         video = tree.root.add("Video", data="video_root", expand=True)
         video.add("Library", data="video_library")
+        video.add_leaf("Continue Watching", data="video_continue")
+        video.add_leaf("Recently Added", data="video_recent")
+        video.add_leaf("Health Check", data="video_health")
+        video.add("Views", data="video_filters")
         video.add_leaf("PlayLists", data="video_playlists")
         
         yield tree
@@ -110,11 +124,13 @@ class Sidebar(Widget):
             with get_connection() as conn:
                 artists = [row["artist"] for row in conn.execute("SELECT DISTINCT artist FROM music_tracks ORDER BY artist COLLATE NOCASE").fetchall()]
                 categories = [row["category"] for row in conn.execute("SELECT DISTINCT category FROM video_files ORDER BY category").fetchall()]
-            self.app.call_from_thread(self._populate_tree, artists, categories)
+                v_filters = [dict(row) for row in conn.execute("SELECT id, name FROM video_filters ORDER BY name").fetchall()]
+                m_filters = [dict(row) for row in conn.execute("SELECT id, name FROM music_filters ORDER BY name").fetchall()]
+            self.app.call_from_thread(self._populate_tree, artists, categories, v_filters, m_filters)
         except Exception as e:
             logger.error(f"Sidebar.refresh_tree failed: {e}")
 
-    def _populate_tree(self, artists: list[str], categories: list[str]) -> None:
+    def _populate_tree(self, artists: list[str], categories: list[str], v_filters: list[dict], m_filters: list[dict]) -> None:
         tree = self.query_one("#nav-tree", Tree)
         
         def find_node(root, data_id):
@@ -130,11 +146,23 @@ class Sidebar(Widget):
             for name in artists:
                 music_lib.add_leaf(name, data={"type": "artist", "name": name})
         
+        music_filters = find_node(tree.root, "music_filters")
+        if music_filters:
+            music_filters.remove_children()
+            for f in m_filters:
+                music_filters.add_leaf(f["name"], data={"type": "music_filter", "id": f["id"], "name": f["name"]})
+
         video_lib = find_node(tree.root, "video_library")
         if video_lib:
             video_lib.remove_children()
             for cat in categories:
                 video_lib.add_leaf(cat or "(unknown)", data={"type": "video_category", "name": cat})
+
+        video_filters = find_node(tree.root, "video_filters")
+        if video_filters:
+            video_filters.remove_children()
+            for f in v_filters:
+                video_filters.add_leaf(f["name"], data={"type": "video_filter", "id": f["id"], "name": f["name"]})
 
     def select_node_by_data(self, data_id: any) -> None:
         tree = self.query_one("#nav-tree", Tree)
@@ -147,6 +175,107 @@ class Sidebar(Widget):
             return False
         find_and_select(tree.root)
 
+    def action_edit_view(self) -> None:
+        tree = self.query_one("#nav-tree", Tree)
+        node = tree.cursor_node
+        if not node:
+            return
+        
+        data = node.data
+        if isinstance(data, dict) and data.get("type") == "video_filter":
+            from .database import get_connection
+            with get_connection() as conn:
+                f = conn.execute("SELECT * FROM video_filters WHERE id = ?", (data["id"],)).fetchone()
+            if f:
+                from .widgets.modals import VideoFilterEditModal
+                self.app.push_screen(VideoFilterEditModal(dict(f)), callback=self._after_view_edited)
+        elif isinstance(data, dict) and data.get("type") == "music_filter":
+            from .database import get_connection
+            with get_connection() as conn:
+                f = conn.execute("SELECT * FROM music_filters WHERE id = ?", (data["id"],)).fetchone()
+            if f:
+                from .widgets.modals import MusicFilterEditModal
+                self.app.push_screen(MusicFilterEditModal(dict(f)), callback=self._after_view_edited)
+
+    def action_create_view(self) -> None:
+        tree = self.query_one("#nav-tree", Tree)
+        node = tree.cursor_node
+        if not node:
+            return
+        
+        is_video_context = False
+        is_music_context = False
+        curr = node
+        while curr:
+            if curr.data in ("video_root", "video_library", "video_filters", "video_playlists"):
+                is_video_context = True
+                break
+            if curr.data in ("music_root", "music_library", "music_filters", "music_playlists"):
+                is_music_context = True
+                break
+            if isinstance(curr.data, dict):
+                if curr.data.get("type") in ("video_category", "video_filter"):
+                    is_video_context = True
+                    break
+                if curr.data.get("type") in ("artist", "music_filter"):
+                    is_music_context = True
+                    break
+            curr = curr.parent
+
+        if is_video_context:
+            from .widgets.modals import VideoFilterEditModal
+            self.app.push_screen(VideoFilterEditModal(), callback=self._after_view_edited)
+        elif is_music_context:
+            from .widgets.modals import MusicFilterEditModal
+            self.app.push_screen(MusicFilterEditModal(), callback=self._after_view_edited)
+
+    def action_delete_view(self) -> None:
+        tree = self.query_one("#nav-tree", Tree)
+        node = tree.cursor_node
+        if not node:
+            return
+
+        data = node.data
+        if isinstance(data, dict) and data.get("type") == "video_filter":
+            filter_id = data["id"]
+            filter_name = data["name"]
+            from .widgets.modals import ConfirmModal
+            def check_confirm(confirmed: bool) -> None:
+                if confirmed:
+                    from .database import delete_video_filter
+                    delete_video_filter(filter_id)
+                    self.app.notify(f"View '{filter_name}' deleted")
+                    self.refresh_tree()
+                    if self.app._current_screen_name == "video_filter" and \
+                       self.app._current_screen_data.get("id") == filter_id:
+                        self.app.switch_screen("video")
+            self.app.push_screen(ConfirmModal(f"Delete view '{filter_name}'?"), callback=check_confirm)
+        elif isinstance(data, dict) and data.get("type") == "music_filter":
+            filter_id = data["id"]
+            filter_name = data["name"]
+            from .widgets.modals import ConfirmModal
+            def check_confirm(confirmed: bool) -> None:
+                if confirmed:
+                    from .database import delete_music_filter
+                    delete_music_filter(filter_id)
+                    self.app.notify(f"View '{filter_name}' deleted")
+                    self.refresh_tree()
+                    if self.app._current_screen_name == "music_filter" and \
+                       self.app._current_screen_data.get("id") == filter_id:
+                        self.app.switch_screen("music")
+            self.app.push_screen(ConfirmModal(f"Delete view '{filter_name}'?"), callback=check_confirm)
+
+    def _after_view_edited(self, result: bool) -> None:
+        if result:
+            self.refresh_tree()
+            if self.app._current_screen_name == "video_filter":
+                data = self.app._current_screen_data
+                self.app._current_screen_data = None
+                self.app.switch_screen_with_data("video_filter", data, focus_right=True)
+            elif self.app._current_screen_name == "music_filter":
+                data = self.app._current_screen_data
+                self.app._current_screen_data = None
+                self.app.switch_screen_with_data("music_filter", data, focus_right=True)
     async def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         await self._handle_node_change(event.node)
 
@@ -162,8 +291,19 @@ class Sidebar(Widget):
             self.app.switch_screen("video")
         elif data == "music_library":
             self.app.switch_screen("music")
+        elif data == "music_filters":
+            # No default action for the 'Views' parent node itself
+            pass
+        elif data == "music_recent":
+            self.app.switch_screen("music_recent")
         elif data == "video_library":
             self.app.switch_screen("video")
+        elif data == "video_continue":
+            self.app.switch_screen("video_continue")
+        elif data == "video_recent":
+            self.app.switch_screen("video_recent")
+        elif data == "video_health":
+            self.app.switch_screen("video_health")
         elif data == "music_queue":
             self.app.switch_screen("music_queue")
         elif data == "music_playlists":
@@ -173,8 +313,12 @@ class Sidebar(Widget):
         elif isinstance(data, dict):
             if data.get("type") == "artist":
                 self.app.switch_screen_with_data("artist", data["name"])
+            elif data.get("type") == "music_filter":
+                self.app.switch_screen_with_data("music_filter", data)
             elif data.get("type") == "video_category":
                 self.app.switch_screen_with_data("video_category", data["name"])
+            elif data.get("type") == "video_filter":
+                self.app.switch_screen_with_data("video_filter", data)
 
 class PlaylistCreateModal(Screen):
     DEFAULT_CSS = """
@@ -321,6 +465,7 @@ class KitvcApp(App):
         Binding("p", "toggle_pause", "Play/Pause"),
         Binding("escape", "quit", "Quit"),
         Binding("backspace", "go_back", "Back"),
+        Binding("/", "search", "Search"),
         Binding("1", "switch_to_queue", "Music Queue", priority=True),
         Binding("2", "switch_to_playlists", "Music PL", priority=True),
         Binding("3", "switch_to_video_playlists", "Video PL", priority=True),
@@ -396,6 +541,7 @@ class KitvcApp(App):
             self.video_lib = VideoLibrary(self.config["video"]["directories"])
             self.screen_history = []
             self._last_playlist_add_idx = 0
+            self._last_video_category = ""
             self._current_media = None
             self._current_screen_name = None
             self._current_screen_data = None
@@ -582,7 +728,6 @@ class KitvcApp(App):
 
     def action_video_targeted_scan(self) -> None:
         """Trigger targeted video scan for marked/selected items."""
-        # Check if we are on a video screen
         from .widgets.media_lists import VideoList
         try:
             vl = self.query_one(VideoList)
@@ -595,64 +740,138 @@ class KitvcApp(App):
             self.notify("No videos selected/marked", severity="warning")
             return
 
+        # Classification helper
+        def is_tv_video(v):
+            v_type = str(v.get("type") or "").lower()
+            if "movie" in v_type: return False
+            if "tv" in v_type: return True
+            # Fallback for untyped: check for series/season metadata
+            if v.get("series") or v.get("season"): return True
+            return False
+
+        tv_vids = [v for v in videos if is_tv_video(v)]
+        movie_vids = [v for v in videos if not is_tv_video(v)]
+
+        # If ONLY movies are selected, auto-fetch immediately (skip ALL dialogs)
+        if movie_vids and not tv_vids:
+            self._do_batch_movie_auto_fetch(movie_vids)
+            return
+
         from .widgets.modals import VideoScanChoiceModal
         def handle_choice(method: str | None) -> None:
-            if method:
-                # Ask for search details
-                def handle_fetch_details(details: dict | None) -> None:
-                    if details:
-                        lang = details["language"]
-                        is_tv = details["is_tv"]
-                        self.update_video_language(lang)
-                        self.update_video_media_type(is_tv)
-                        self._do_targeted_video_scan(videos, details)
+            if not method: return
+            
+            if method == "search":
+                # Auto-fetch movies in background
+                if movie_vids:
+                    self._do_batch_movie_auto_fetch(movie_vids)
                 
-                # Use first video's data as default for the fetch dialog
-                v = videos[0]
-                default_query = v.get("series") or v.get("title")
-                if method == "filename":
-                    from .utils import parse_video_filename
-                    meta = parse_video_filename(v["filename"])
-                    default_query = meta.get("series") or meta.get("title")
-                
-                is_tv = bool(v.get("series") or v.get("season"))
-                season = v.get("season")
-                episode = v.get("episode")
-                if method == "filename":
-                    season = meta.get("season")
-                    episode = meta.get("episode")
-                
-                self.show_video_fetch_dialog(default_query or "", is_tv, handle_fetch_details, season=season, episode=episode)
+                # Then handle TV shows via dialog
+                if tv_vids:
+                    def handle_fetch_details(details: dict | None) -> None:
+                        if details:
+                            self.update_video_language(details["language"])
+                            self.update_video_media_type(details["is_tv"])
+                            # CRITICAL: Only scan the TV videos here!
+                            self._do_batch_scan_by_id(tv_vids, details)
+                    
+                    v = tv_vids[0]
+                    self.show_video_fetch_dialog(v.get("series") or v.get("title") or "", True, handle_fetch_details, 
+                                                 season=v.get("season"), episode=v.get("episode"), is_batch=(len(tv_vids) > 1))
+            else:
+                # For auto methods (filename/metadata), process all
+                self._do_batch_scan_auto(videos, method)
         
         self.push_screen(VideoScanChoiceModal(len(videos)), callback=handle_choice)
 
     @work(thread=True)
-    def _do_targeted_video_scan(self, videos: list[dict], details: dict) -> None:
-        query = details["query"]
+    def _do_batch_movie_auto_fetch(self, videos: list[dict]) -> None:
+        lang = self.config.get("video", {}).get("language", "ja")
+        self.call_from_thread(self.notify, f"Auto-fetching metadata for {len(videos)} Movie(s)...")
+        for i, video in enumerate(videos, 1):
+            if len(videos) > 1:
+                self.call_from_thread(self.notify, f"Movie ({i}/{len(videos)}): {video['title'] or video['filename']}")
+            self.video_lib.enrich_movie_by_exact_title(video, language=lang)
+        
+        if not any(v.get("type") and "tv" in str(v.get("type")).lower() for v in videos):
+            # If ONLY movies were selected, show completion
+            self.call_from_thread(self.notify, "Movie batch fetch complete")
+            self.call_from_thread(self._refresh_current_screen)
+
+    @work(thread=True)
+    def _do_batch_scan_auto(self, videos: list[dict], method: str) -> None:
+        lang = self.config.get("video", {}).get("language", "ja")
+        use_filename = (method == "filename")
+        self.call_from_thread(self.notify, f"Auto-scanning {len(videos)} video(s)...")
+        for i, video in enumerate(videos, 1):
+            if len(videos) > 1:
+                self.call_from_thread(self.notify, f"Scanning ({i}/{len(videos)}): {video['filename']}")
+            self.video_lib.enrich_single_video(video, use_filename=use_filename, language=lang)
+        
+        self.call_from_thread(self.notify, "Batch scan complete")
+        self.call_from_thread(self._refresh_current_screen)
+
+    @work(thread=True)
+    def _do_batch_scan_by_id(self, videos: list[dict], details: dict) -> None:
+        tmdb_id = details["tmdb_id"]
         is_tv = details["is_tv"]
         lang = details["language"]
         
-        self.call_from_thread(self.notify, f"Refreshing {len(videos)} video(s) [{lang}]...")
+        self.call_from_thread(self.notify, f"Refreshing {len(videos)} video(s) by TMDB ID {tmdb_id}...")
         
         for i, video in enumerate(videos, 1):
             if len(videos) > 1:
                 self.call_from_thread(self.notify, f"Scanning ({i}/{len(videos)}): {video['filename']}")
             
-            # Use custom query and type from the fetch modal for the FIRST video
-            # For subsequent videos in a batch, it's tricky. 
-            # If it's a batch, we probably should still use auto-logic but with the chosen language.
-            # But let's assume if user specified a query, they want to apply it to all selected (e.g. same series).
-            v_to_scan = dict(video)
-            if i == 1:
-                v_to_scan["series"] = query
-                # We can't easily override 'is_tv' inside enrich_single_video without changes, 
-                # but enrich_single_video already checks series/season.
+            season = video.get("season")
+            episode = video.get("episode")
             
-            # Temporary change to VideoLibrary to support explicit override
-            self.video_lib.enrich_single_video_by_id(v_to_scan, details["tmdb_id"], is_tv=is_tv, language=lang, season=details.get("season"), episode=details.get("episode"))
+            if len(videos) == 1:
+                season = details.get("season")
+                episode = details.get("episode")
+            elif is_tv and (season is None or episode is None):
+                from .utils import parse_video_filename
+                meta = parse_video_filename(video["filename"])
+                season = meta.get("season")
+                episode = meta.get("episode")
+
+            self.video_lib.enrich_single_video_by_id(video, tmdb_id, is_tv=is_tv, language=lang, season=season, episode=episode)
         
-        self.call_from_thread(self.notify, "Targeted scan complete")
+        self.call_from_thread(self.notify, "Batch scan complete")
         self.call_from_thread(self._refresh_current_screen)
+
+    def _refresh_current_screen(self) -> None:
+        """Reload the data in the currently active screen."""
+        try:
+            # 1. Video Screens
+            video_screens = [
+                "VideoLibraryScreen", "VideoCategoryScreen", "VideoFilterScreen",
+                "VideoHealthScreen", "VideoContinueScreen", "VideoRecentScreen",
+                "VideoPlaylistScreen"
+            ]
+            for s_name in video_screens:
+                for screen in self.query(s_name):
+                    if hasattr(screen, "_load"): screen._load()
+                    if hasattr(screen, "reload_playlists"): screen.reload_playlists()
+
+            # 2. Music Screens
+            music_screens = [
+                "MusicRecentScreen", "MusicFilterScreen", "MusicPlaylistScreen",
+                "MusicArtistScreen"
+            ]
+            for s_name in music_screens:
+                for screen in self.query(s_name):
+                    if hasattr(screen, "_load"): screen._load()
+                    if hasattr(screen, "_load_albums"): screen._load_albums()
+                    if hasattr(screen, "reload_playlists"): screen.reload_playlists()
+
+            # 3. Sidebar
+            try:
+                self.query_one("Sidebar").refresh_tree()
+            except Exception: pass
+
+        except Exception as e:
+            logger.error(f"UI Refresh failed: {e}")
 
     async def _watch_theme(self) -> None:
         if not THEME_PATH.exists(): return
@@ -732,29 +951,6 @@ class KitvcApp(App):
         try: self.query_one(Sidebar).refresh_tree()
         except Exception: pass
 
-    def _refresh_current_screen(self) -> None:
-        """Refresh the currently active screen if it supports reloading."""
-        try:
-            # If we are on MusicArtistScreen, it has _load_albums
-            # Note: self.screen might be a screen or a specific widget depending on push_view
-            # Let's check the focused screen and its children
-            current = self.screen
-            if hasattr(current, "_load_albums"):
-                current._load_albums()
-            elif hasattr(current, "reload_playlists"):
-                current.reload_playlists()
-                
-            # Also check if it's within our ContentArea
-            try:
-                content = self.query_one("#content")
-                for child in content.children:
-                    if hasattr(child, "_load_albums"):
-                        child._load_albums()
-            except Exception:
-                pass
-        except Exception as e:
-            logger.error(f"UI Refresh failed: {e}")
-
     async def push_view(self, widget: Widget) -> None:
         content = self.query_one("#content", ContentArea)
         for child in list(content.children):
@@ -791,9 +987,16 @@ class KitvcApp(App):
             self._current_screen_name = name
             self._current_screen_data = data
             if name == "music": new_screen = MusicLibraryScreen()
+            elif name == "music_recent": new_screen = MusicRecentScreen()
             elif name == "video": new_screen = VideoLibraryScreen()
+            elif name == "video_continue": new_screen = VideoContinueScreen()
+            elif name == "video_recent": new_screen = VideoRecentScreen()
+            elif name == "video_health": new_screen = VideoHealthScreen()
             elif name in ("queue", "music_queue"): new_screen = QueueScreen()
             elif name == "artist": new_screen = MusicArtistScreen(data)
+            elif name == "music_filter":
+                from .screens.music import MusicFilterScreen
+                new_screen = MusicFilterScreen(data["id"], data["name"])
             elif name == "music_playlists": new_screen = MusicPlaylistScreen()
             elif name == "video_playlists":
                 from .screens.video import VideoPlaylistScreen
@@ -801,6 +1004,9 @@ class KitvcApp(App):
             elif name == "video_category":
                 from .screens.video import VideoCategoryScreen
                 new_screen = VideoCategoryScreen(data)
+            elif name == "video_filter":
+                from .screens.video import VideoFilterScreen
+                new_screen = VideoFilterScreen(data["id"], data["name"])
             else: new_screen = None
             if new_screen:
                 await content.mount(new_screen)
@@ -878,7 +1084,7 @@ class KitvcApp(App):
         if isinstance(track_paths, str): track_paths = [track_paths]
         self.push_screen(PlaylistQuickAddModal(track_paths, is_video=is_video))
 
-    def show_video_fetch_dialog(self, query: str, is_tv: bool | None, callback: callable, season: int = None, episode: int = None) -> None:
+    def show_video_fetch_dialog(self, query: str, is_tv: bool | None, callback: callable, season: int = None, episode: int = None, is_batch: bool = False) -> None:
         from .widgets.modals import VideoFetchModal
         current_lang = self.config.get("video", {}).get("language", "ja")
         
@@ -886,7 +1092,7 @@ class KitvcApp(App):
         if is_tv is None:
             is_tv = True
             
-        self.push_screen(VideoFetchModal(query, is_tv, current_lang, season=season, episode=episode), callback=callback)
+        self.push_screen(VideoFetchModal(query, is_tv, current_lang, season=season, episode=episode, is_batch=is_batch), callback=callback)
 
     def update_video_language(self, lang: str) -> None:
         if "video" not in self.config:
@@ -992,6 +1198,25 @@ class KitvcApp(App):
             self.notify(f"Imported '{name}' with {len(tracks)} items")
             self.query_one(Sidebar).refresh_tree()
         except Exception as e: self.notify(f"Import failed: {e}", severity="error")
+
+    def action_search(self) -> None:
+        from .widgets.modals import GlobalSearchModal
+        def handle_search(item: dict | None) -> None:
+            if item:
+                if item["type"] == "Music":
+                    if item["cat"]:
+                        self.switch_screen_with_data("artist", item["cat"])
+                    else:
+                        self.switch_screen("music")
+                else:
+                    with get_connection() as conn:
+                        v = conn.execute("SELECT category FROM video_files WHERE path = ?", (item["path"],)).fetchone()
+                        if v and v["category"]:
+                            self.switch_screen_with_data("video_category", v["category"])
+                        else:
+                            self.switch_screen("video")
+                self.notify(f"Navigated to {item['type']} screen")
+        self.push_screen(GlobalSearchModal(), callback=handle_search)
 
     async def on_unmount(self) -> None:
         await self.mpv_info.shutdown()

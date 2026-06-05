@@ -730,3 +730,91 @@ class QueueScreen(Static):
                     # Ensure cursor follows the moved item
                     self.call_later(lambda: table.move_cursor(row=to_idx))
             event.stop()
+
+class MusicRecentScreen(Widget):
+    DEFAULT_CSS = """
+    MusicRecentScreen { height: 1fr; padding: 1 2; }
+    MusicRecentScreen #recent-heading { text-style: bold; margin-bottom: 1; }
+    MusicRecentScreen TrackList { border: solid $primary; }
+    """
+    def compose(self) -> ComposeResult:
+        yield Label("Recently Added Music", id="recent-heading")
+        yield TrackList(id="track-list")
+
+    def on_mount(self) -> None:
+        self._load()
+        self.set_interval(0.5, self._update_playback_status)
+
+    def _update_playback_status(self) -> None:
+        try:
+            tl = self.query_one("#track-list", TrackList)
+            track = self.app.music_player.get_current_track()
+            path = track["path"] if track else None
+            is_paused = self.app.music_player._paused
+            tl.set_current_index_by_path(path, is_paused)
+        except Exception: pass
+
+    @work(thread=True)
+    def _load(self) -> None:
+        from ..database import get_connection
+        with get_connection() as conn:
+            tracks = [dict(row) for row in conn.execute(
+                "SELECT * FROM music_tracks ORDER BY created_at DESC LIMIT 50"
+            ).fetchall()]
+        self.app.call_from_thread(self._populate, tracks)
+
+    def _populate(self, tracks: list[dict]) -> None:
+        self.query_one(TrackList).load(tracks)
+
+    def on_track_list_track_selected(self, event: TrackList.TrackSelected) -> None:
+        self.app.music_player.play_track(event.track, event.tracks, event.index)
+
+class MusicFilterScreen(Widget):
+    DEFAULT_CSS = """
+    MusicFilterScreen { height: 1fr; padding: 1 2; }
+    MusicFilterScreen #filter-heading { text-style: bold; margin-bottom: 1; }
+    MusicFilterScreen TrackList { border: solid $primary; }
+    """
+    def __init__(self, filter_id: int, filter_name: str, **kwargs):
+        super().__init__(**kwargs)
+        self.filter_id = filter_id
+        self.filter_name = filter_name
+
+    def compose(self) -> ComposeResult:
+        yield Label(f"Music View: {self.filter_name}", id="filter-heading")
+        yield Label("n: New View  |  e: Edit View  |  d: Delete View", classes="playlist-help")
+        yield TrackList(id="track-list")
+
+    def on_mount(self) -> None:
+        self._load()
+        self.set_interval(0.5, self._update_playback_status)
+
+    def _update_playback_status(self) -> None:
+        try:
+            tl = self.query_one("#track-list", TrackList)
+            curr = self.app.music_player.get_current_track()
+            if not curr:
+                tl.set_current_index(-1)
+                return
+            is_paused = self.app.music_player._paused
+            tl.set_current_index_by_path(curr["path"], is_paused)
+        except Exception: pass
+
+    @work(thread=True)
+    def _load(self) -> None:
+        from ..database import get_connection, get_filtered_tracks
+        with get_connection() as conn:
+            f = conn.execute("SELECT * FROM music_filters WHERE id = ?", (self.filter_id,)).fetchone()
+        
+        if f:
+            tracks = get_filtered_tracks(f["conditions_json"], f["sort_json"])
+        else:
+            tracks = []
+        
+        self.app.call_from_thread(self._populate, tracks)
+
+    def _populate(self, tracks: list[dict]) -> None:
+        self.query_one(TrackList).load(tracks)
+
+    def on_track_list_track_selected(self, event: TrackList.TrackSelected) -> None:
+        self.app.music_player.play_track(event.track, event.tracks, event.index)

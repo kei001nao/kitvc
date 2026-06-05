@@ -177,7 +177,7 @@ class TrackList(Widget):
             
             tracks = self.get_marked_tracks()
             if tracks:
-                self.app.player.add_to_queue(tracks)
+                self.app.music_player.add_to_queue(tracks)
                 self.app.notify(f"Added {len(tracks)} tracks to queue")
             event.stop()
 
@@ -200,6 +200,11 @@ class VideoList(Widget):
             super().__init__()
             self.video = video
 
+    class BatchEditRequested(Message):
+        def __init__(self, videos: list[dict]) -> None:
+            super().__init__()
+            self.videos = videos
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._videos = []
@@ -214,12 +219,13 @@ class VideoList(Widget):
         table = self.query_one(DataTable)
         table.add_column("M", key="mark")
         table.add_column("Type", key="type", width=10)
+        table.add_column("Category", key="category")
+        table.add_column("SubCat", key="subcategory")
         table.add_column("Series", key="series")
         table.add_column("S", key="season", width=3)
         table.add_column("E", key="episode", width=3)
         table.add_column("Title", key="title")
         table.add_column("Date", key="air_date", width=10)
-        table.add_column("Category", key="category")
         table.add_column("Filename", key="filename")
         if self._videos:
             self.load(self._videos)
@@ -233,8 +239,19 @@ class VideoList(Widget):
                     target_idx = i
                     break
         
+        # Check if index is the same AND the pause state is the same
         if self._current_index == target_idx and getattr(self, "_last_is_paused", None) == is_paused:
-            return
+            # Check if current mark is consistent with playback state
+            if self._current_index != -1:
+                table = self.query_one(DataTable)
+                try:
+                    current_mark = table.get_cell(str(self._current_index), "mark")
+                    expected_mark = "■" if is_paused else "▶"
+                    if current_mark == expected_mark:
+                        return
+                except Exception: pass
+            else:
+                return
 
         table = self.query_one(DataTable)
         if self._current_index != -1 and self._current_index < len(self._videos):
@@ -302,12 +319,13 @@ class VideoList(Widget):
             table.add_row(
                 mark,
                 v.get("type") or "",
+                v.get("category") or "",
+                v.get("subcategory") or "",
                 v.get("series") or "",
                 str(v.get("season") or ""),
                 str(v.get("episode") or ""),
                 v.get("title") or "",
                 v.get("air_date") or "",
-                v.get("category") or "",
                 v.get("filename", ""),
                 key=str(i)
             )
@@ -348,10 +366,23 @@ class VideoList(Widget):
                     table.move_cursor(row=next_row)
             event.stop()
         elif event.key == "e":
-            if table.cursor_row is not None:
-                row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-                idx = int(str(row_key.value))
-                self.post_message(self.VideoEditRequested(self._videos[idx]))
+            videos = self.get_marked_videos()
+            if not videos:
+                event.stop()
+                return
+            
+            if len(videos) == 1 and not self._marked_indices:
+                # Single edit (cursor only, not marked)
+                self.post_message(self.VideoEditRequested(videos[0]))
+            else:
+                # Batch edit (marked items)
+                self.post_message(self.BatchEditRequested(videos))
+            event.stop()
+        elif event.key == "E":
+            # Keep E as explicit batch edit
+            videos = self.get_marked_videos()
+            if videos:
+                self.post_message(self.BatchEditRequested(videos))
             event.stop()
         elif event.key == "a":
             videos = self.get_marked_videos()
@@ -363,4 +394,7 @@ class VideoList(Widget):
             if videos:
                 self.app.video_player.add_to_queue(videos)
                 self.app.notify(f"Added {len(videos)} videos to queue")
+            event.stop()
+        elif event.key == "s":
+            self.app.action_video_targeted_scan()
             event.stop()
