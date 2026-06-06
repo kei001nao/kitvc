@@ -397,7 +397,25 @@ class FilterConditionModal(Screen):
         super().__init__(**kwargs)
         self.fields = fields
         self.operators = operators
-        self.condition = condition or {"field": "type", "op": "==", "value": ""}
+        
+        # Use provided condition or default
+        if condition:
+            self.condition = condition.copy()
+        else:
+            self.condition = {"field": None, "op": "==", "value": ""}
+
+        # Sanitize field: if not in list, use first or None
+        field_vals = [f[1] for f in self.fields]
+        if self.condition["field"] not in field_vals:
+            self.condition["field"] = field_vals[0] if field_vals else None
+
+        # Sanitize operator: if not in list, use first or None
+        op_vals = [o[1] for o in self.operators]
+        if self.condition["op"] not in op_vals:
+            if "==" in op_vals:
+                self.condition["op"] = "=="
+            else:
+                self.condition["op"] = op_vals[0] if op_vals else None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="cond-edit-container"):

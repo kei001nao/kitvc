@@ -198,7 +198,7 @@ class VideoFilterScreen(Widget):
 
     def compose(self) -> ComposeResult:
         yield Label(f"View: {self.filter_name}", id="filter-heading")
-        yield Label("n: New View  |  e: Edit View  |  d: Delete View", classes="video-playlist-help")
+        yield Label("n: New View | e: Edit View | d: Delete View | q: Add All to Queue", classes="video-playlist-help")
         yield VideoList(id="video-list")
 
     def on_mount(self) -> None:
@@ -235,7 +235,39 @@ class VideoFilterScreen(Widget):
         self.app.play_video(event.video, event.videos, event.index, resume=False)
 
     def on_key(self, event) -> None:
-        if event.key == "p":
+        if event.key == "n":
+            from ..widgets.modals import VideoFilterEditModal
+            self.app.push_screen(VideoFilterEditModal(), callback=self._on_view_edited)
+            event.stop()
+        elif event.key == "e":
+            from ..database import get_connection
+            with get_connection() as conn:
+                f = conn.execute("SELECT * FROM video_filters WHERE id = ?", (self.filter_id,)).fetchone()
+            if f:
+                from ..widgets.modals import VideoFilterEditModal
+                self.app.push_screen(VideoFilterEditModal(dict(f)), callback=self._on_view_edited)
+            event.stop()
+        elif event.key == "d":
+            from ..widgets.modals import ConfirmModal
+            def check_confirm(confirmed: bool) -> None:
+                if confirmed:
+                    from ..database import delete_video_filter
+                    delete_video_filter(self.filter_id)
+                    self.app.notify(f"View '{self.filter_name}' deleted")
+                    try:
+                        from ..app import Sidebar
+                        self.app.query_one(Sidebar).refresh_tree()
+                    except Exception: pass
+                    self.app.switch_screen("video")
+            self.app.push_screen(ConfirmModal(f"Delete view '{self.filter_name}'?"), callback=check_confirm)
+            event.stop()
+        elif event.key == "q":
+            vl = self.query_one("#video-list", VideoList)
+            if vl._videos:
+                self.app.video_player.add_to_queue(vl._videos)
+                self.app.notify(f"Added {len(vl._videos)} videos to queue")
+            event.stop()
+        elif event.key == "p":
             vl = self.query_one("#video-list", VideoList)
             from textual.widgets import DataTable
             try:
@@ -255,6 +287,14 @@ class VideoFilterScreen(Widget):
                     return
             except Exception:
                 pass
+
+    def _on_view_edited(self, result: bool) -> None:
+        if result:
+            self._load()
+            try:
+                from ..app import Sidebar
+                self.app.query_one(Sidebar).refresh_tree()
+            except Exception: pass
 
     def on_video_list_video_edit_requested(self, event: VideoList.VideoEditRequested) -> None:
         self.app.push_screen(VideoEditModal(event.video), callback=self._on_edit_finished)

@@ -782,7 +782,7 @@ class MusicFilterScreen(Widget):
 
     def compose(self) -> ComposeResult:
         yield Label(f"Music View: {self.filter_name}", id="filter-heading")
-        yield Label("n: New View  |  e: Edit View  |  d: Delete View", classes="playlist-help")
+        yield Label("n: New View | e: Edit View | d: Delete View | q: Add All to Queue", classes="playlist-help")
         yield TrackList(id="track-list")
 
     def on_mount(self) -> None:
@@ -818,3 +818,45 @@ class MusicFilterScreen(Widget):
 
     def on_track_list_track_selected(self, event: TrackList.TrackSelected) -> None:
         self.app.music_player.play_track(event.track, event.tracks, event.index)
+
+    def on_key(self, event) -> None:
+        if event.key == "n":
+            from ..widgets.modals import MusicFilterEditModal
+            self.app.push_screen(MusicFilterEditModal(), callback=self._after_view_edited)
+            event.stop()
+        elif event.key == "e":
+            from ..database import get_connection
+            with get_connection() as conn:
+                f = conn.execute("SELECT * FROM music_filters WHERE id = ?", (self.filter_id,)).fetchone()
+            if f:
+                from ..widgets.modals import MusicFilterEditModal
+                self.app.push_screen(MusicFilterEditModal(dict(f)), callback=self._after_view_edited)
+            event.stop()
+        elif event.key == "d":
+            from ..widgets.modals import ConfirmModal
+            def check_confirm(confirmed: bool) -> None:
+                if confirmed:
+                    from ..database import delete_music_filter
+                    delete_music_filter(self.filter_id)
+                    self.app.notify(f"View '{self.filter_name}' deleted")
+                    try:
+                        from ..app import Sidebar
+                        self.app.query_one(Sidebar).refresh_tree()
+                    except Exception: pass
+                    self.app.switch_screen("music")
+            self.app.push_screen(ConfirmModal(f"Delete view '{self.filter_name}'?"), callback=check_confirm)
+            event.stop()
+        elif event.key == "q":
+            tl = self.query_one("#track-list", TrackList)
+            if tl._tracks:
+                self.app.music_player.add_to_queue(tl._tracks)
+                self.app.notify(f"Added {len(tl._tracks)} tracks to queue")
+            event.stop()
+
+    def _after_view_edited(self, result: bool) -> None:
+        if result:
+            self._load()
+            try:
+                from ..app import Sidebar
+                self.app.query_one(Sidebar).refresh_tree()
+            except Exception: pass

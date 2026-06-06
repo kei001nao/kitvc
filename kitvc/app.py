@@ -480,6 +480,8 @@ class KitvcApp(App):
         Binding("0", "volume_up", "Vol +10%", show=False),
         Binding("ctrl+right_square_bracket", "resize_sidebar(2)", "Resize +", show=False),
         Binding("ctrl+left_square_bracket", "resize_sidebar(-2)", "Resize -", show=False),
+        Binding("ctrl+right", "resize_sidebar(2)", "Resize +", show=False),
+        Binding("ctrl+left", "resize_sidebar(-2)", "Resize -", show=False),
     ]
 
     def _generate_css(self, primary: str, accent: str, bg: str, surface: str, sidebar_width: int = 44) -> str:
@@ -489,7 +491,7 @@ class KitvcApp(App):
         $background: {bg};
         $surface: {surface};
 
-        App {{ background: $background; }}
+        App {{ background: $background; padding: 1 2; }}
         #main-layout {{ layout: horizontal; height: 1fr; }}
         Sidebar {{ width: {sidebar_width}; border-right: solid $primary; background: $background; }}
         Sidebar #app-title {{ height: auto; color: $primary; text-style: bold; margin: 0 0 1 1; }}
