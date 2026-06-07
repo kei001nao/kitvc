@@ -198,7 +198,7 @@ class VideoFilterScreen(Widget):
 
     def compose(self) -> ComposeResult:
         yield Label(f"View: {self.filter_name}", id="filter-heading")
-        yield Label("n: New View | e: Edit View | d: Delete View | q: Add All to Queue", classes="video-playlist-help")
+        yield Label("n: New View | e: Edit View | d: Delete View", classes="video-playlist-help")
         yield VideoList(id="video-list")
 
     def on_mount(self) -> None:
@@ -261,12 +261,6 @@ class VideoFilterScreen(Widget):
                     self.app.switch_screen("video")
             self.app.push_screen(ConfirmModal(f"Delete view '{self.filter_name}'?"), callback=check_confirm)
             event.stop()
-        elif event.key == "q":
-            vl = self.query_one("#video-list", VideoList)
-            if vl._videos:
-                self.app.video_player.add_to_queue(vl._videos)
-                self.app.notify(f"Added {len(vl._videos)} videos to queue")
-            event.stop()
         elif event.key == "p":
             vl = self.query_one("#video-list", VideoList)
             from textual.widgets import DataTable
@@ -324,10 +318,10 @@ class VideoPlaylistScreen(Widget):
 
     def compose(self) -> ComposeResult:
         yield Label("Video Playlists")
-        yield Label("n: New  |  d: Delete Playlist  |  q: Add All to Queue  |  Enter: Select", classes="video-playlist-help")
+        yield Label("n: New  |  d: Delete Playlist  |  Enter: Select", classes="video-playlist-help")
         yield DataTable(id="video-playlist-selector", cursor_type="row")
         yield Label("Playlist Content")
-        yield Label("d: Remove  |  Shift+Up/Down: Move  |  q: Add All to Queue", classes="video-playlist-help")
+        yield Label("d: Remove  |  Shift+Up/Down: Move", classes="video-playlist-help")
         with Vertical(id="video-playlist-tracks-container"):
             yield VideoList(id="video-playlist-tracks")
 
@@ -434,11 +428,6 @@ class VideoPlaylistScreen(Widget):
                 except Exception:
                     pass
                 event.stop()
-            elif event.key == "q" and table_selector.cursor_row is not None:
-                if vl._videos:
-                    self.app.video_player.add_to_queue(vl._videos)
-                    self.app.notify(f"Added all videos from playlist to queue")
-                event.stop()
         
         elif vl_focused or event.key == "p":
             if event.key == "p":
@@ -457,12 +446,6 @@ class VideoPlaylistScreen(Widget):
                         event.stop()
                 except Exception:
                     pass
-                return
-
-            if event.key == "q":
-                self.app.video_player.add_to_queue(vl._videos)
-                self.app.notify(f"Added {len(vl._videos)} videos to queue")
-                event.stop()
                 return
 
             if event.key in ("d", "delete", "shift+up", "shift+down"):

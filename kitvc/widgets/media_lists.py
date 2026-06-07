@@ -389,12 +389,6 @@ class VideoList(Widget):
             if videos:
                 self.app.show_playlist_add_dialog([v["path"] for v in videos], is_video=True)
             event.stop()
-        elif event.key == "q":
-            videos = self.get_marked_videos()
-            if videos:
-                self.app.video_player.add_to_queue(videos)
-                self.app.notify(f"Added {len(videos)} videos to queue")
-            event.stop()
         elif event.key == "s":
             self.app.action_video_targeted_scan()
             event.stop()
