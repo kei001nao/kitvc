@@ -1,0 +1,6 @@
+textual
+mutagen
+requests
+musicbrainzngs
+tmdbv3api
+textual-image
