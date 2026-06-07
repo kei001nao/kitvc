@@ -17,4 +17,7 @@ ENV/
 # Project specifics
 error_log.txt
 .gemini/
-
+kitvc.log
+headroom.txt
+gkitvc.sh
+stopproxy.sh
