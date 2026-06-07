@@ -1,12 +1,18 @@
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Callable, Optional
 
-INFO_SOCKET = "/tmp/kitvc-info.sock"
-MUSIC_SOCKET = "/tmp/kitvc-music.sock"
-VIDEO_SOCKET = "/tmp/kitvc-video.sock"
+if sys.platform == "win32":
+    INFO_SOCKET = r"\\.\pipe\kitvc-info"
+    MUSIC_SOCKET = r"\\.\pipe\kitvc-music"
+    VIDEO_SOCKET = r"\\.\pipe\kitvc-video"
+else:
+    INFO_SOCKET = "/tmp/kitvc-info.sock"
+    MUSIC_SOCKET = "/tmp/kitvc-music.sock"
+    VIDEO_SOCKET = "/tmp/kitvc-video.sock"
 
 MPV_BASE_ARGS = [
     "mpv",
@@ -27,11 +33,12 @@ class MpvInstance:
         self.on_event: list[Callable[[dict], None]] = []
 
     async def start(self) -> None:
-        if Path(self.socket_path).exists():
-            try:
-                os.unlink(self.socket_path)
-            except OSError:
-                pass
+        if sys.platform != "win32":
+            if Path(self.socket_path).exists():
+                try:
+                    os.unlink(self.socket_path)
+                except OSError:
+                    pass
 
         args = list(MPV_BASE_ARGS) + [f"--input-ipc-server={self.socket_path}"] + self.extra_args
         self._process = await asyncio.create_subprocess_exec(
@@ -41,13 +48,32 @@ class MpvInstance:
         )
 
         for _ in range(50):
-            if Path(self.socket_path).exists():
-                break
+            if sys.platform == "win32":
+                pipe_name = self.socket_path.split("\\")[-1]
+                exists = False
+                try:
+                    exists = pipe_name in os.listdir(r"\\.\pipe\\")
+                except OSError:
+                    pass
+                if exists:
+                    break
+            else:
+                if Path(self.socket_path).exists():
+                    break
             await asyncio.sleep(0.1)
         else:
             raise RuntimeError(f"mpv IPC socket {self.socket_path} did not appear")
 
-        self._reader, self._writer = await asyncio.open_unix_connection(self.socket_path)
+        if sys.platform == "win32":
+            loop = asyncio.get_running_loop()
+            self._reader = asyncio.StreamReader(loop=loop)
+            protocol = asyncio.StreamReaderProtocol(self._reader, loop=loop)
+            transport, _ = await loop.create_pipe_connection(
+                lambda: protocol, self.socket_path
+            )
+            self._writer = asyncio.StreamWriter(transport, protocol, self._reader, loop)
+        else:
+            self._reader, self._writer = await asyncio.open_unix_connection(self.socket_path)
         self._read_task = asyncio.create_task(self._read_loop())
 
     async def _read_loop(self) -> None:
@@ -120,7 +146,7 @@ class MpvInstance:
                 await self._process.wait()
             except Exception:
                 pass
-        if Path(self.socket_path).exists():
+        if sys.platform != "win32" and Path(self.socket_path).exists():
             try:
                 os.unlink(self.socket_path)
             except OSError:
