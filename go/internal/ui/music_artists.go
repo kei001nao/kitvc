@@ -29,7 +29,8 @@ func newMusicArtists(width, height int, artists []string) musicArtists {
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("240")).
 		BorderBottom(false).
-		Bold(false)
+		Foreground(lipgloss.Color("5")).
+		Bold(true)
 	s.Selected = s.Selected.
 		Foreground(lipgloss.Color("229")).
 		Background(lipgloss.Color("57")).

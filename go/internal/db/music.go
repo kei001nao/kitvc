@@ -19,9 +19,10 @@ type TrackData struct {
 }
 
 type Album struct {
-	ID     int64
-	Artist string
-	Title  string
+	ID          int64
+	Artist      string
+	Title       string
+	ReleaseDate string
 }
 
 func UpdateMusicTrack(t TrackData) error {
@@ -108,7 +109,7 @@ func GetMusicTracks(artist, albumTitle string) ([]TrackData, error) {
 }
 
 func GetMusicArtistsAndAlbums() ([]string, map[string][]Album, error) {
-	rows, err := db.Query("SELECT id, artist, title FROM music_albums ORDER BY artist, title")
+	rows, err := db.Query("SELECT id, artist, title, COALESCE(release_date, '') FROM music_albums ORDER BY artist, release_date DESC, title")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -120,7 +121,7 @@ func GetMusicArtistsAndAlbums() ([]string, map[string][]Album, error) {
 
 	for rows.Next() {
 		var a Album
-		if err := rows.Scan(&a.ID, &a.Artist, &a.Title); err != nil {
+		if err := rows.Scan(&a.ID, &a.Artist, &a.Title, &a.ReleaseDate); err != nil {
 			return nil, nil, err
 		}
 		if !artistMap[a.Artist] {

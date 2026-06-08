@@ -366,6 +366,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if v, ok := val.(float64); ok {
 				m.volume = v
 			}
+
+			valPause, _ := m.player.GetProperty("pause")
+			isPaused := false
+			if p, ok := valPause.(bool); ok {
+				isPaused = p
+			}
+			currentPath := m.player.GetCurrentTrackPath()
+			m.trackList.UpdatePlaybackStatus(currentPath, isPaused)
+			m.artistDetail.UpdatePlaybackStatus(currentPath, isPaused)
 		}
 		cmds = append(cmds, tick())
 	}

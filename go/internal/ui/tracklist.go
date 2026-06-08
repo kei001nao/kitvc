@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strconv"
 	"kitvc/internal/db"
 
 	"github.com/charmbracelet/bubbles/table"
@@ -11,6 +12,7 @@ import (
 type trackList struct {
 	table  table.Model
 	styles table.Styles
+	tracks []db.TrackData
 }
 
 func newTrackList(width, height int, artist, albumTitle string) trackList {
@@ -27,8 +29,11 @@ func newTrackListFromTracks(width, height int, tracks []db.TrackData) trackList 
 	)
 
 	var rows []table.Row
-	for _, t := range tracks {
+	for i, t := range tracks {
 		rows = append(rows, table.Row{
+			"",                        // M
+			strconv.Itoa(i + 1),       // #
+			strconv.Itoa(t.TrackNum),  // Alb#
 			t.Title,
 			t.Artist,
 			t.Album,
@@ -41,14 +46,15 @@ func newTrackListFromTracks(width, height int, tracks []db.TrackData) trackList 
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("240")).
 		BorderBottom(false).
-		Bold(false)
+		Foreground(lipgloss.Color("5")).
+		Bold(true)
 	s.Selected = s.Selected.
 		Foreground(lipgloss.Color("229")).
 		Background(lipgloss.Color("57")).
 		Bold(false)
 	t.SetStyles(s)
 
-	tl := trackList{table: t, styles: s}
+	tl := trackList{table: t, styles: s, tracks: tracks}
 	tl.SetSize(width, height)
 	tl.table.SetRows(rows)
 	return tl
@@ -71,8 +77,7 @@ func (tl *trackList) SetSize(w, h int) {
 	tl.table.SetWidth(w)
 	tl.table.SetHeight(h - 4)
 	
-	// Subtract space for 3 separators (approx 9) + borders (2) + margin
-	avail := w - 12
+	avail := w - 25
 	if avail < 15 {
 		avail = 15
 	}
@@ -84,14 +89,16 @@ func (tl *trackList) SetSize(w, h int) {
 	}
 
 	cols := []table.Column{
+		{Title: "M", Width: 3},
+		{Title: "#", Width: 4},
+		{Title: "Alb#", Width: 6},
 		{Title: "Title", Width: otherAvail * 4 / 10},
 		{Title: "Artist", Width: otherAvail * 3 / 10},
 		{Title: "Album", Width: otherAvail - (otherAvail * 4 / 10) - (otherAvail * 3 / 10)},
 		{Title: "Duration", Width: durationWidth},
 	}
 	
-	// Ensure minimums
-	for i := 0; i < 3; i++ {
+	for i := 3; i < 6; i++ {
 		if cols[i].Width < 4 { cols[i].Width = 4 }
 	}
 
@@ -107,4 +114,31 @@ func (tl *trackList) SetFocus(f bool) {
 		tl.styles.Selected = tl.styles.Selected.Background(lipgloss.Color("240"))
 	}
 	tl.table.SetStyles(tl.styles)
+}
+
+func (tl *trackList) UpdatePlaybackStatus(currentPath string, isPaused bool) {
+	rows := tl.table.Rows()
+	changed := false
+	
+	for i, t := range tl.tracks {
+		var mark string
+		if t.Path == currentPath {
+			if isPaused {
+				mark = "■"
+			} else {
+				mark = "▶"
+			}
+		} else {
+			mark = ""
+		}
+		
+		if i < len(rows) && rows[i][0] != mark {
+			rows[i][0] = mark
+			changed = true
+		}
+	}
+	
+	if changed {
+		tl.table.SetRows(rows)
+	}
 }

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strconv"
 	"kitvc/internal/db"
 
 	"github.com/charmbracelet/bubbles/table"
@@ -24,7 +25,8 @@ func newMusicArtistDetail(width, height int, artist string, albums []db.Album) m
 	// 1. Albums table (Upper)
 	at := table.New(
 		table.WithColumns([]table.Column{
-			{Title: "Album", Width: width - 2},
+			{Title: "Date", Width: 12},
+			{Title: "Album", Width: width - 15},
 		}),
 		table.WithFocused(true),
 		table.WithHeight(5), // Fixed height for albums table
@@ -33,17 +35,14 @@ func newMusicArtistDetail(width, height int, artist string, albums []db.Album) m
 
 	var albumRows []table.Row
 	for _, album := range albums {
-		albumRows = append(albumRows, table.Row{album.Title})
+		albumRows = append(albumRows, table.Row{album.ReleaseDate, album.Title})
 	}
 	at.SetRows(albumRows)
 
 	// 2. Tracks table (Lower) - Initialized empty
 	tt := table.New(
 		table.WithColumns([]table.Column{
-			{Title: "Title", Width: width * 4 / 10},
-			{Title: "Artist", Width: width * 3 / 10},
-			{Title: "Album", Width: width * 2 / 10},
-			{Title: "Duration", Width: 8},
+			{Title: "Initializing...", Width: 10},
 		}),
 		table.WithFocused(false),
 		table.WithHeight(height - 12), // Adjusted for albums, labels, borders
@@ -55,7 +54,8 @@ func newMusicArtistDetail(width, height int, artist string, albums []db.Album) m
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("240")).
 		BorderBottom(false).
-		Bold(false)
+		Foreground(lipgloss.Color("5")).
+		Bold(true)
 	s.Selected = s.Selected.
 		Foreground(lipgloss.Color("229")).
 		Background(lipgloss.Color("57")).
@@ -90,8 +90,11 @@ func (mad *musicArtistDetail) loadTracksForAlbum(albumTitle string) {
 	mad.tracks = tracks
 
 	var rows []table.Row
-	for _, t := range tracks {
+	for i, t := range tracks {
 		rows = append(rows, table.Row{
+			"",                        // M
+			strconv.Itoa(i + 1),       // #
+			strconv.Itoa(t.TrackNum),  // Alb#
 			t.Title,
 			t.Artist,
 			t.Album,
@@ -171,7 +174,8 @@ func (mad *musicArtistDetail) SetSize(w, h int) {
 	mad.albumsTable.SetWidth(w)
 	mad.albumsTable.SetHeight(5)
 	mad.albumsTable.SetColumns([]table.Column{
-		{Title: "Album", Width: w - 2},
+		{Title: "Date", Width: 12},
+		{Title: "Album", Width: w - 15},
 	})
 
 	// Lower Table: height h - 14 (space for header/footer, labels, space, albums table)
@@ -182,7 +186,7 @@ func (mad *musicArtistDetail) SetSize(w, h int) {
 	mad.tracksTable.SetWidth(w)
 	mad.tracksTable.SetHeight(lowerHeight)
 
-	avail := w - 12
+	avail := w - 25
 	if avail < 15 {
 		avail = 15
 	}
@@ -193,12 +197,15 @@ func (mad *musicArtistDetail) SetSize(w, h int) {
 	}
 
 	cols := []table.Column{
+		{Title: "M", Width: 3},
+		{Title: "#", Width: 4},
+		{Title: "Alb#", Width: 6},
 		{Title: "Title", Width: otherAvail * 4 / 10},
 		{Title: "Artist", Width: otherAvail * 3 / 10},
 		{Title: "Album", Width: otherAvail - (otherAvail * 4 / 10) - (otherAvail * 3 / 10)},
 		{Title: "Duration", Width: durationWidth},
 	}
-	for i := 0; i < 3; i++ {
+	for i := 3; i < 6; i++ {
 		if cols[i].Width < 4 {
 			cols[i].Width = 4
 		}
@@ -254,4 +261,31 @@ func (mad musicArtistDetail) SelectedTrack() (db.TrackData, bool) {
 		return mad.tracks[cursor], true
 	}
 	return db.TrackData{}, false
+}
+
+func (mad *musicArtistDetail) UpdatePlaybackStatus(currentPath string, isPaused bool) {
+	rows := mad.tracksTable.Rows()
+	changed := false
+	
+	for i, t := range mad.tracks {
+		var mark string
+		if t.Path == currentPath {
+			if isPaused {
+				mark = "■"
+			} else {
+				mark = "▶"
+			}
+		} else {
+			mark = ""
+		}
+		
+		if i < len(rows) && rows[i][0] != mark {
+			rows[i][0] = mark
+			changed = true
+		}
+	}
+	
+	if changed {
+		mad.tracksTable.SetRows(rows)
+	}
 }
