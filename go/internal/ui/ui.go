@@ -24,6 +24,8 @@ const (
 	viewMusicLibrary viewState = iota
 	viewVideoLibrary
 	viewMusicQueue
+	viewMusicArtists
+	viewMusicArtistDetail
 )
 
 type model struct {
@@ -35,6 +37,8 @@ type model struct {
 	sidebar      sidebar
 	trackList    trackList
 	videoList    videoList
+	musicArtists musicArtists
+	artistDetail musicArtistDetail
 	activeView   viewState
 	focusedSide  bool // true if sidebar has focus
 	currentPlaylistID int64 // 0 if not viewing a playlist
@@ -159,6 +163,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.duration = float64(t.Duration)
 						}
 					}
+					return m, nil
+				} else if m.activeView == viewMusicArtists {
+					selectedArtist := m.musicArtists.SelectedArtist()
+					if selectedArtist != "" {
+						m.activeView = viewMusicArtistDetail
+						_, albums, err := db.GetMusicArtistsAndAlbums()
+						if err == nil {
+							sbWidth := m.getSidebarWidth()
+							m.artistDetail = newMusicArtistDetail(m.width-sbWidth-1, m.height-8, selectedArtist, albums[selectedArtist])
+							m.focusedSide = false
+							m.syncFocus()
+						}
+					}
+					return m, nil
+				} else if m.activeView == viewMusicArtistDetail {
+					if !m.artistDetail.focusedUpper {
+						track, ok := m.artistDetail.SelectedTrack()
+						if ok {
+							tracks := m.artistDetail.tracks
+							var paths []string
+							startIndex := -1
+							for i, t := range tracks {
+								paths = append(paths, t.Path)
+								if t.Path == track.Path {
+									startIndex = i
+								}
+							}
+							if startIndex >= 0 {
+								m.player.PlayQueue(paths, startIndex)
+								m.currentTrack = fmt.Sprintf("%s - %s", track.Artist, track.Title)
+								m.duration = float64(track.Duration)
+							}
+						}
+						return m, nil
+					}
 				} else if m.activeView == viewVideoLibrary {
 					selected := m.videoList.table.SelectedRow()
 					if len(selected) > 0 {
@@ -181,8 +220,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.duration = float64(v.Duration)
 						}
 					}
+					return m, nil
 				}
-				return m, nil
 			}
 		case " ": // Play/Pause
 			if m.player != nil {
@@ -303,6 +342,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.trackList.SetSize(mainWidth, m.height-8)
 		m.videoList.SetSize(mainWidth, m.height-8)
+		m.musicArtists.SetSize(mainWidth, m.height-8)
+		m.artistDetail.SetSize(mainWidth, m.height-8)
 	case scanFinishedMsg:
 
 		m.message = fmt.Sprintf("Scan finished: %d items found", msg.count)
@@ -344,6 +385,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.trackList, cmd = m.trackList.Update(msg)
 			cmds = append(cmds, cmd)
+		} else if m.activeView == viewMusicArtists {
+			var cmd tea.Cmd
+			m.musicArtists, cmd = m.musicArtists.Update(msg)
+			cmds = append(cmds, cmd)
+		} else if m.activeView == viewMusicArtistDetail {
+			var cmd tea.Cmd
+			m.artistDetail, cmd = m.artistDetail.Update(msg)
+			cmds = append(cmds, cmd)
 		} else if m.activeView == viewVideoLibrary {
 			var cmd tea.Cmd
 			m.videoList, cmd = m.videoList.Update(msg)
@@ -357,6 +406,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) syncFocus() {
 	if m.activeView == viewMusicLibrary {
 		m.trackList.SetFocus(!m.focusedSide)
+	} else if m.activeView == viewMusicArtists {
+		m.musicArtists.SetFocus(!m.focusedSide)
+	} else if m.activeView == viewMusicArtistDetail {
+		m.artistDetail.SetFocus(!m.focusedSide)
 	} else if m.activeView == viewVideoLibrary {
 		m.videoList.SetFocus(!m.focusedSide)
 	}
@@ -367,15 +420,23 @@ func (m *model) handleSidebarChange(n *node) {
 
 	switch {
 	case n.id == "music_library":
-		m.activeView = viewMusicLibrary
-		m.refreshTrackList("", "")
+		m.activeView = viewMusicArtists
+		artists, _, err := db.GetMusicArtistsAndAlbums()
+		if err == nil {
+			sbWidth := m.getSidebarWidth()
+			m.musicArtists = newMusicArtists(m.width-sbWidth-1, m.height-8, artists)
+		}
 	case n.id == "video_library":
 		m.activeView = viewVideoLibrary
 		m.refreshVideoList()
 	case strings.HasPrefix(n.id, "artist:"):
 		artist := strings.TrimPrefix(n.id, "artist:")
-		m.activeView = viewMusicLibrary
-		m.refreshTrackList(artist, "")
+		m.activeView = viewMusicArtistDetail
+		_, albums, err := db.GetMusicArtistsAndAlbums()
+		if err == nil {
+			sbWidth := m.getSidebarWidth()
+			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-1, m.height-8, artist, albums[artist])
+		}
 	case strings.HasPrefix(n.id, "album:"):
 		artist, album := m.getCurrentFilter()
 		m.activeView = viewMusicLibrary
@@ -578,6 +639,10 @@ func (m model) View() string {
 	switch m.activeView {
 	case viewMusicLibrary:
 		mainContentStr = m.trackList.View()
+	case viewMusicArtists:
+		mainContentStr = m.musicArtists.View()
+	case viewMusicArtistDetail:
+		mainContentStr = m.artistDetail.View()
 	case viewVideoLibrary:
 		mainContentStr = m.videoList.View()
 	default:

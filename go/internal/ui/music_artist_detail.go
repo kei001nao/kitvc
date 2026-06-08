@@ -1,0 +1,257 @@
+package ui
+
+import (
+	"kitvc/internal/db"
+
+	"github.com/charmbracelet/bubbles/table"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+type musicArtistDetail struct {
+	artist       string
+	albums       []db.Album
+	tracks       []db.TrackData
+	albumsTable  table.Model
+	tracksTable  table.Model
+	focusedUpper bool
+	width        int
+	height       int
+	styles       table.Styles
+}
+
+func newMusicArtistDetail(width, height int, artist string, albums []db.Album) musicArtistDetail {
+	// 1. Albums table (Upper)
+	at := table.New(
+		table.WithColumns([]table.Column{
+			{Title: "Album", Width: width - 2},
+		}),
+		table.WithFocused(true),
+		table.WithHeight(5), // Fixed height for albums table
+		table.WithWidth(width),
+	)
+
+	var albumRows []table.Row
+	for _, album := range albums {
+		albumRows = append(albumRows, table.Row{album.Title})
+	}
+	at.SetRows(albumRows)
+
+	// 2. Tracks table (Lower) - Initialized empty
+	tt := table.New(
+		table.WithColumns([]table.Column{
+			{Title: "Title", Width: width * 4 / 10},
+			{Title: "Artist", Width: width * 3 / 10},
+			{Title: "Album", Width: width * 2 / 10},
+			{Title: "Duration", Width: 8},
+		}),
+		table.WithFocused(false),
+		table.WithHeight(height - 12), // Adjusted for albums, labels, borders
+		table.WithWidth(width),
+	)
+
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		BorderBottom(false).
+		Bold(false)
+	s.Selected = s.Selected.
+		Foreground(lipgloss.Color("229")).
+		Background(lipgloss.Color("57")).
+		Bold(false)
+
+	at.SetStyles(s)
+	tt.SetStyles(s)
+
+	mad := musicArtistDetail{
+		artist:       artist,
+		albums:       albums,
+		albumsTable:  at,
+		tracksTable:  tt,
+		focusedUpper: true,
+		width:        width,
+		height:       height,
+		styles:       s,
+	}
+
+	mad.SetSize(width, height)
+	
+	// Load tracks for the first album if any
+	if len(albums) > 0 {
+		mad.loadTracksForAlbum(albums[0].Title)
+	}
+
+	return mad
+}
+
+func (mad *musicArtistDetail) loadTracksForAlbum(albumTitle string) {
+	tracks, _ := db.GetMusicTracks(mad.artist, albumTitle)
+	mad.tracks = tracks
+
+	var rows []table.Row
+	for _, t := range tracks {
+		rows = append(rows, table.Row{
+			t.Title,
+			t.Artist,
+			t.Album,
+			formatDuration(t.Duration),
+		})
+	}
+	mad.tracksTable.SetRows(rows)
+	if len(rows) > 0 {
+		mad.tracksTable.SetCursor(0)
+	}
+}
+
+func (mad musicArtistDetail) Update(msg tea.Msg) (musicArtistDetail, tea.Cmd) {
+	var cmd tea.Cmd
+
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "enter":
+			if mad.focusedUpper {
+				// Move focus to tracks list
+				mad.focusedUpper = false
+				mad.syncTableFocus()
+				return mad, nil
+			}
+			// If lower is focused, Enter is handled by main ui.go to play the track
+		case "esc":
+			if !mad.focusedUpper {
+				// Return focus to albums list
+				mad.focusedUpper = true
+				mad.syncTableFocus()
+				return mad, nil
+			}
+		}
+	}
+
+	if mad.focusedUpper {
+		oldCursor := mad.albumsTable.Cursor()
+		mad.albumsTable, cmd = mad.albumsTable.Update(msg)
+		newCursor := mad.albumsTable.Cursor()
+
+		// If album selection changed, load new tracks
+		if oldCursor != newCursor && newCursor >= 0 && newCursor < len(mad.albums) {
+			mad.loadTracksForAlbum(mad.albums[newCursor].Title)
+		}
+	} else {
+		mad.tracksTable, cmd = mad.tracksTable.Update(msg)
+	}
+
+	return mad, cmd
+}
+
+func (mad musicArtistDetail) View() string {
+	albumsLabel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5")).Render("Albums")
+	tracksLabel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5")).Render("Tracks")
+
+	// Render tables
+	albumsView := mad.albumsTable.View()
+	tracksView := mad.tracksTable.View()
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		albumsLabel,
+		albumsView,
+		"",
+		tracksLabel,
+		tracksView,
+	)
+}
+
+func (mad *musicArtistDetail) SetSize(w, h int) {
+	if w <= 0 {
+		w = 1
+	}
+	mad.width = w
+	mad.height = h
+
+	// Upper Table: height 5
+	mad.albumsTable.SetWidth(w)
+	mad.albumsTable.SetHeight(5)
+	mad.albumsTable.SetColumns([]table.Column{
+		{Title: "Album", Width: w - 2},
+	})
+
+	// Lower Table: height h - 14 (space for header/footer, labels, space, albums table)
+	lowerHeight := h - 14
+	if lowerHeight < 3 {
+		lowerHeight = 3
+	}
+	mad.tracksTable.SetWidth(w)
+	mad.tracksTable.SetHeight(lowerHeight)
+
+	avail := w - 12
+	if avail < 15 {
+		avail = 15
+	}
+	durationWidth := 8
+	otherAvail := avail - durationWidth
+	if otherAvail < 10 {
+		otherAvail = 10
+	}
+
+	cols := []table.Column{
+		{Title: "Title", Width: otherAvail * 4 / 10},
+		{Title: "Artist", Width: otherAvail * 3 / 10},
+		{Title: "Album", Width: otherAvail - (otherAvail * 4 / 10) - (otherAvail * 3 / 10)},
+		{Title: "Duration", Width: durationWidth},
+	}
+	for i := 0; i < 3; i++ {
+		if cols[i].Width < 4 {
+			cols[i].Width = 4
+		}
+	}
+	mad.tracksTable.SetColumns(cols)
+}
+
+func (mad *musicArtistDetail) SetFocus(f bool) {
+	if f {
+		mad.syncTableFocus()
+	} else {
+		mad.albumsTable.Blur()
+		mad.tracksTable.Blur()
+		mad.albumsTable.SetStyles(mad.getStyles(false))
+		mad.tracksTable.SetStyles(mad.getStyles(false))
+	}
+}
+
+func (mad *musicArtistDetail) syncTableFocus() {
+	if mad.focusedUpper {
+		mad.albumsTable.Focus()
+		mad.tracksTable.Blur()
+		mad.albumsTable.SetStyles(mad.getStyles(true))
+		mad.tracksTable.SetStyles(mad.getStyles(false))
+	} else {
+		mad.albumsTable.Blur()
+		mad.tracksTable.Focus()
+		mad.albumsTable.SetStyles(mad.getStyles(false))
+		mad.tracksTable.SetStyles(mad.getStyles(true))
+	}
+}
+
+func (mad musicArtistDetail) getStyles(focused bool) table.Styles {
+	s := mad.styles
+	if focused {
+		s.Selected = s.Selected.Background(lipgloss.Color("57"))
+	} else {
+		s.Selected = s.Selected.Background(lipgloss.Color("240"))
+	}
+	return s
+}
+
+func (mad musicArtistDetail) SelectedTrack() (db.TrackData, bool) {
+	if mad.focusedUpper {
+		return db.TrackData{}, false
+	}
+	row := mad.tracksTable.SelectedRow()
+	if len(row) == 0 {
+		return db.TrackData{}, false
+	}
+	cursor := mad.tracksTable.Cursor()
+	if cursor >= 0 && cursor < len(mad.tracks) {
+		return mad.tracks[cursor], true
+	}
+	return db.TrackData{}, false
+}
