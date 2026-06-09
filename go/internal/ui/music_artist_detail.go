@@ -19,6 +19,7 @@ type musicArtistDetail struct {
 	width        int
 	height       int
 	styles       table.Styles
+	marked       map[int]bool
 }
 
 func newMusicArtistDetail(width, height int, artist string, albums []db.Album) musicArtistDetail {
@@ -73,6 +74,7 @@ func newMusicArtistDetail(width, height int, artist string, albums []db.Album) m
 		width:        width,
 		height:       height,
 		styles:       s,
+		marked:       make(map[int]bool),
 	}
 
 	mad.SetSize(width, height)
@@ -88,6 +90,7 @@ func newMusicArtistDetail(width, height int, artist string, albums []db.Album) m
 func (mad *musicArtistDetail) loadTracksForAlbum(albumTitle string) {
 	tracks, _ := db.GetMusicTracks(mad.artist, albumTitle)
 	mad.tracks = tracks
+	mad.ClearMarks()
 
 	var rows []table.Row
 	for i, t := range tracks {
@@ -186,11 +189,12 @@ func (mad *musicArtistDetail) SetSize(w, h int) {
 	mad.tracksTable.SetWidth(w)
 	mad.tracksTable.SetHeight(lowerHeight)
 
-	avail := w - 25
+	avail := w - 27
 	if avail < 15 {
 		avail = 15
 	}
-	durationWidth := 8
+
+	durationWidth := 10
 	otherAvail := avail - durationWidth
 	if otherAvail < 10 {
 		otherAvail = 10
@@ -248,6 +252,14 @@ func (mad musicArtistDetail) getStyles(focused bool) table.Styles {
 	return s
 }
 
+func (mad musicArtistDetail) SelectedAlbum() (string, bool) {
+	row := mad.albumsTable.SelectedRow()
+	if len(row) < 2 {
+		return "", false
+	}
+	return row[1], true
+}
+
 func (mad musicArtistDetail) SelectedTrack() (db.TrackData, bool) {
 	if mad.focusedUpper {
 		return db.TrackData{}, false
@@ -269,14 +281,13 @@ func (mad *musicArtistDetail) UpdatePlaybackStatus(currentPath string, isPaused 
 	
 	for i, t := range mad.tracks {
 		var mark string
-		if t.Path == currentPath {
-			if isPaused {
-				mark = "■"
-			} else {
-				mark = "▶"
-			}
-		} else {
-			mark = ""
+		switch {
+		case t.Path == currentPath && isPaused:
+			mark = "■"
+		case t.Path == currentPath:
+			mark = "▶"
+		case mad.marked[i]:
+			mark = "●"
 		}
 		
 		if i < len(rows) && rows[i][0] != mark {
@@ -288,4 +299,27 @@ func (mad *musicArtistDetail) UpdatePlaybackStatus(currentPath string, isPaused 
 	if changed {
 		mad.tracksTable.SetRows(rows)
 	}
+}
+
+func (mad *musicArtistDetail) MarkedTracks() []string {
+	var paths []string
+	for i, marked := range mad.marked {
+		if marked && i >= 0 && i < len(mad.tracks) {
+			paths = append(paths, mad.tracks[i].Path)
+		}
+	}
+	return paths
+}
+
+func (mad *musicArtistDetail) HasMarks() bool {
+	for _, m := range mad.marked {
+		if m {
+			return true
+		}
+	}
+	return false
+}
+
+func (mad *musicArtistDetail) ClearMarks() {
+	mad.marked = make(map[int]bool)
 }

@@ -13,6 +13,7 @@ type trackList struct {
 	table  table.Model
 	styles table.Styles
 	tracks []db.TrackData
+	marked map[int]bool
 }
 
 func newTrackList(width, height int, artist, albumTitle string) trackList {
@@ -54,7 +55,7 @@ func newTrackListFromTracks(width, height int, tracks []db.TrackData) trackList 
 		Bold(false)
 	t.SetStyles(s)
 
-	tl := trackList{table: t, styles: s, tracks: tracks}
+	tl := trackList{table: t, styles: s, tracks: tracks, marked: make(map[int]bool)}
 	tl.SetSize(width, height)
 	tl.table.SetRows(rows)
 	return tl
@@ -77,12 +78,12 @@ func (tl *trackList) SetSize(w, h int) {
 	tl.table.SetWidth(w)
 	tl.table.SetHeight(h - 4)
 	
-	avail := w - 25
+	avail := w - 27
 	if avail < 15 {
 		avail = 15
 	}
 
-	durationWidth := 8
+	durationWidth := 10
 	otherAvail := avail - durationWidth
 	if otherAvail < 10 {
 		otherAvail = 10
@@ -122,14 +123,13 @@ func (tl *trackList) UpdatePlaybackStatus(currentPath string, isPaused bool) {
 	
 	for i, t := range tl.tracks {
 		var mark string
-		if t.Path == currentPath {
-			if isPaused {
-				mark = "■"
-			} else {
-				mark = "▶"
-			}
-		} else {
-			mark = ""
+		switch {
+		case t.Path == currentPath && isPaused:
+			mark = "■"
+		case t.Path == currentPath:
+			mark = "▶"
+		case tl.marked[i]:
+			mark = "●"
 		}
 		
 		if i < len(rows) && rows[i][0] != mark {
@@ -141,4 +141,18 @@ func (tl *trackList) UpdatePlaybackStatus(currentPath string, isPaused bool) {
 	if changed {
 		tl.table.SetRows(rows)
 	}
+}
+
+func (tl *trackList) ClearMarks() {
+	tl.marked = make(map[int]bool)
+}
+
+func (tl *trackList) MarkedPaths() []string {
+	var paths []string
+	for i, marked := range tl.marked {
+		if marked && i >= 0 && i < len(tl.tracks) {
+			paths = append(paths, tl.tracks[i].Path)
+		}
+	}
+	return paths
 }

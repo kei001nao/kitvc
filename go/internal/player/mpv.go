@@ -204,6 +204,8 @@ func (p *MpvPlayer) LoadFile(path string) error {
 	if err := p.EnsureRunning(); err != nil {
 		return err
 	}
+	p.SetProperty("pause", false)
+
 	// Use 'replace' to clear current playlist and start new one
 	cmd := map[string]interface{}{
 		"command": []interface{}{"loadfile", path, "replace"},

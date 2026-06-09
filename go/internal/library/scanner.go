@@ -86,7 +86,7 @@ func readVideoMetadata(path string) (Video, error) {
 		return Video{}, err
 	}
 
-	duration, _ := strconv.ParseFloat(data.Format.Duration, 64)
+	duration := parseFfprobeDuration(data.Format.Duration)
 	year := 0
 	dateStr := data.Format.Tags.Date
 	if dateStr == "" {
@@ -187,6 +187,28 @@ func readAudioTags(path string) (Track, error) {
 		TrackNum:    trackNum,
 		DiscNum:     discNum,
 		Genre:       m.Genre(),
-		// Duration: m.Duration(), // tag library might not provide duration for all formats
+		Duration: getAudioDuration(path),
 	}, nil
+}
+
+func parseFfprobeDuration(durationStr string) int {
+	d, _ := strconv.ParseFloat(durationStr, 64)
+	return int(d)
+}
+
+func getAudioDuration(path string) int {
+	cmd := exec.Command("ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	var data struct {
+		Format struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
+	}
+	if err := json.Unmarshal(out, &data); err != nil {
+		return 0
+	}
+	return parseFfprobeDuration(data.Format.Duration)
 }

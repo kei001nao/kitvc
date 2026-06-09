@@ -34,6 +34,7 @@ type sidebar struct {
 	cursor      int
 	width       int
 	height      int
+	cover       coverArt
 }
 
 func newSidebar(width, height int) sidebar {
@@ -178,11 +179,52 @@ func (s *sidebar) addVisible(n *node) {
 	}
 }
 
+func (s *sidebar) SelectByID(id string) bool {
+	for i, n := range s.visibleRows {
+		if n.id == id {
+			s.cursor = i
+			return true
+		}
+	}
+	return false
+}
+
 func (s sidebar) SelectedNode() *node {
 	if s.cursor >= 0 && s.cursor < len(s.visibleRows) {
 		return s.visibleRows[s.cursor]
 	}
 	return nil
+}
+
+func (s sidebar) NumVisible() int {
+	return len(s.visibleRows)
+}
+
+func (s *sidebar) SetCoverPath(path string, cols, maxRows int) bool {
+	return s.cover.load(path, cols, maxRows)
+}
+
+func (s *sidebar) CoverPath() string {
+	if !s.cover.cached {
+		return ""
+	}
+	return s.cover.path
+}
+
+func (s *sidebar) CoverRow() int {
+	return 3 + s.height - s.cover.rows
+}
+
+func (s *sidebar) CoverCols() int {
+	return s.cover.cols
+}
+
+func (s *sidebar) CoverRows() int {
+	return s.cover.rows
+}
+
+func (s *sidebar) HasCover() bool {
+	return s.cover.cached && s.cover.art != ""
 }
 
 func (s sidebar) Update(msg tea.Msg) (sidebar, tea.Cmd) {
@@ -224,13 +266,10 @@ func (s *sidebar) SetSize(width, height int) {
 }
 
 func (s sidebar) View(focused bool) string {
-	var b strings.Builder
-
+	var tree strings.Builder
 	for i, n := range s.visibleRows {
-		// Indentation
 		indent := strings.Repeat("  ", n.level)
 		
-		// Prefix (expanded/collapsed)
 		prefix := "  "
 		if len(n.children) > 0 {
 			if n.expanded {
@@ -242,18 +281,43 @@ func (s sidebar) View(focused bool) string {
 
 		style := lipgloss.NewStyle().PaddingLeft(1).UnsetBackground()
 		if i == s.cursor {
-			// Always red foreground for selected node, no background
 			style = style.Foreground(lipgloss.Color("1"))
 		}
 
 		line := fmt.Sprintf("%s%s%s", indent, prefix, n.label)
-		// Truncate line if it's longer than sidebar width - padding - border
 		availWidth := s.width - 2
 		if availWidth > 0 && len(line) > availWidth {
 			line = line[:availWidth]
 		}
 		
-		b.WriteString(style.Render(line) + "\n")
+		tree.WriteString(style.Render(line))
+		if i < len(s.visibleRows)-1 {
+			tree.WriteString("\n")
+		}
+	}
+	treeStr := tree.String()
+	treeLines := len(s.visibleRows)
+
+	var coverStr string
+	coverLines := 0
+	if s.cover.cached && s.cover.art != "" {
+		coverStr = s.cover.art
+		coverLines = s.cover.rows
+	}
+
+	// Push cover to bottom of sidebar area
+	padding := s.height - treeLines - coverLines
+	if padding < 0 {
+		padding = 0
+	}
+
+	var content strings.Builder
+	content.WriteString(treeStr)
+	for i := 0; i < padding; i++ {
+		content.WriteString("\n")
+	}
+	if coverStr != "" {
+		content.WriteString(coverStr)
 	}
 
 	sidebarStyle := lipgloss.NewStyle().
@@ -261,5 +325,5 @@ func (s sidebar) View(focused bool) string {
 		Height(s.height).
 		UnsetBackground()
 	
-	return sidebarStyle.Render(b.String())
+	return sidebarStyle.Render(content.String())
 }

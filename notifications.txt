@@ -1,0 +1,25 @@
+[INFORMATION] Scanning local files...
+[INFORMATION] Fetching metadata (1/13): I Don't Like Mondays. - FUTURE
+[INFORMATION] Fetching metadata (6/13): 藤井 風 - HELP EVER HURT NEVER
+[INFORMATION] Fetching metadata (11/13): 藤井 風 - へでもねーよ
+[INFORMATION] Playlist 'My Playlist' deleted
+[INFORMATION] Playlist 'New Playlist 2' deleted
+[INFORMATION] Playlist 'New Playlist 3' deleted
+[INFORMATION] Online metadata fetch complete!
+[INFORMATION] Scanning video library...
+[INFORMATION] Playlist 'New Playlist 4' deleted
+[INFORMATION] Playlist 'New Playlist 5' deleted
+[INFORMATION] Library scan complete!
+[INFORMATION] Scanning local files...
+[INFORMATION] Fetching metadata (1/4): Nulbarich - H.O.T
+[INFORMATION] Online metadata fetch complete!
+[INFORMATION] Scanning video library...
+[INFORMATION] Library scan complete!
+[INFORMATION] Scanning local files...
+[INFORMATION] Fetching metadata (1/4): Nulbarich - H.O.T
+[INFORMATION] Online metadata fetch complete!
+[INFORMATION] Scanning video library...
+[INFORMATION] Library scan complete!
+[INFORMATION] Added to 'My Playlist'
+[INFORMATION] Added to 'My Playlist'
+[INFORMATION] Added to 'test'
