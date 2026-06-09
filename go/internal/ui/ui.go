@@ -1090,47 +1090,36 @@ func (m *model) coverDisplayCmd() tea.Cmd {
 	cols := m.sidebar.CoverCols()
 	rows := m.sidebar.CoverRows()
 	return func() tea.Msg {
+		// Use high-resolution Kitty protocol.
 		cmd := exec.Command("chafa", "-f", "kitty",
+			"--symbols", "none",
+			"--probe", "off",
 			"--size", fmt.Sprintf("%dx%d", cols, rows),
 			path)
+		cmd.Env = append(os.Environ(), "TERM=xterm-kitty")
 		out, err := cmd.Output()
 		if err != nil {
 			return nil
 		}
+		
 		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
 		if err != nil {
 			return nil
 		}
 		defer f.Close()
+
+		// Hide cursor, move to position, draw, then hide cursor again to be sure.
+		f.WriteString("\x1b[?25l") 
+		fmt.Fprintf(f, "\x1b[%d;1H", m.sidebar.CoverRow()+1)
 		f.Write(out)
-		// Place at correct sidebar position
-		placeSeq := fmt.Sprintf("\x1b_Ga=p,i=1,c=%d,r=%d,x=0,y=%d\x1b\\",
-			cols, rows, m.sidebar.CoverRow())
-		f.WriteString(placeSeq)
+		f.WriteString("\x1b[?25l")
+		f.Sync()
 		return nil
 	}
 }
 
 func (m *model) coverPlaceCmd() tea.Cmd {
-	if !m.sidebar.HasCover() {
-		return nil
-	}
-	return func() tea.Msg {
-		cmd := exec.Command("chafa", "-f", "kitty",
-			"--size", fmt.Sprintf("%dx%d", m.sidebar.CoverCols(), m.sidebar.CoverRows()),
-			m.sidebar.CoverPath())
-		out, err := cmd.Output()
-		if err != nil {
-			return nil
-		}
-		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
-		if err != nil {
-			return nil
-		}
-		defer f.Close()
-		f.Write(out)
-		return nil
-	}
+	return m.coverDisplayCmd()
 }
 
 type tickMsg time.Time
@@ -1295,7 +1284,7 @@ func (m model) View() string {
 		)
 	}
 
-	return mainView
+	return mainView + "\x1b[?25l"
 }
 
 func (m model) renderHeader() string {
