@@ -351,6 +351,79 @@ func GetMusicTracksByAlbumID(albumID int64) ([]TrackData, error) {
 	return tracks, nil
 }
 
+type MusicFilter struct {
+	ID             int64
+	Name           string
+	ConditionsJSON string
+	SortJSON       string
+}
+
+func GetRecentMusicTracks(limit int) ([]TrackData, error) {
+	rows, err := db.Query(
+		"SELECT path, mtime, title, artist, album, album_artist, track_num, disc_num, genre, duration FROM music_tracks ORDER BY created_at DESC LIMIT ?",
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tracks []TrackData
+	for rows.Next() {
+		var t TrackData
+		if err := rows.Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration); err != nil {
+			return nil, err
+		}
+		tracks = append(tracks, t)
+	}
+	return tracks, nil
+}
+
+func GetMusicFilters() ([]MusicFilter, error) {
+	rows, err := db.Query("SELECT id, name, COALESCE(conditions_json, ''), COALESCE(sort_json, '') FROM music_filters ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var filters []MusicFilter
+	for rows.Next() {
+		var f MusicFilter
+		if err := rows.Scan(&f.ID, &f.Name, &f.ConditionsJSON, &f.SortJSON); err != nil {
+			return nil, err
+		}
+		filters = append(filters, f)
+	}
+	return filters, nil
+}
+
+func GetMusicFilterByID(id int64) (*MusicFilter, error) {
+	var f MusicFilter
+	err := db.QueryRow(
+		"SELECT id, name, COALESCE(conditions_json, ''), COALESCE(sort_json, '') FROM music_filters WHERE id = ?",
+		id,
+	).Scan(&f.ID, &f.Name, &f.ConditionsJSON, &f.SortJSON)
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+func CreateMusicFilter(name, conditionsJSON, sortJSON string) error {
+	_, err := db.Exec("INSERT INTO music_filters (name, conditions_json, sort_json) VALUES (?, ?, ?)", name, conditionsJSON, sortJSON)
+	return err
+}
+
+func UpdateMusicFilter(id int64, name, conditionsJSON, sortJSON string) error {
+	_, err := db.Exec("UPDATE music_filters SET name = ?, conditions_json = ?, sort_json = ? WHERE id = ?", name, conditionsJSON, sortJSON, id)
+	return err
+}
+
+func DeleteMusicFilter(id int64) error {
+	_, err := db.Exec("DELETE FROM music_filters WHERE id = ?", id)
+	return err
+}
+
 func GetMusicPlaylistTracks(playlistID int64) ([]TrackData, error) {
 	rows, err := db.Query(`
 		SELECT 

@@ -27,6 +27,8 @@ const (
 	viewMusicQueue
 	viewMusicArtists
 	viewMusicArtistDetail
+	viewMusicRecent
+	viewMusicFilter
 )
 
 type pendingAction int
@@ -67,6 +69,8 @@ type model struct {
 	editPaths         []string
 	editAlbumID       int64
 	playingAlbumID    int64
+	currentFilterID   int64
+	currentFilterName string
 }
 
 func InitialModel(cfg *config.Config) model {
@@ -189,6 +193,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if len(selected) > 0 {
 						artist, album := m.getCurrentFilter()
 						tracks, _ := db.GetMusicTracks(artist, album)
+						
+						var paths []string
+						startIndex := -1
+						for i, t := range tracks {
+							paths = append(paths, t.Path)
+							if t.Title == selected[3] && t.Artist == selected[4] {
+								startIndex = i
+							}
+						}
+						
+						if startIndex >= 0 {
+							m.player.PlayQueue(paths, startIndex)
+							t := tracks[startIndex]
+							m.currentTrack = fmt.Sprintf("%s - %s", t.Artist, t.Title)
+							m.duration = float64(t.Duration)
+						}
+					}
+					return m, nil
+				} else if m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
+					selected := m.trackList.table.SelectedRow()
+					if len(selected) > 0 {
+						tracks := m.trackList.tracks
 						
 						var paths []string
 						startIndex := -1
@@ -370,6 +396,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 						}
 					}
+				} else if m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
+					markedPaths := m.trackList.MarkedPaths()
+					if len(markedPaths) > 0 {
+						tracksToAdd = markedPaths
+						hasSelection = true
+					} else {
+						selected := m.trackList.table.SelectedRow()
+						if len(selected) > 0 {
+							for _, t := range m.trackList.tracks {
+								if t.Title == selected[3] && t.Artist == selected[4] {
+									tracksToAdd = []string{t.Path}
+									hasSelection = true
+									break
+								}
+							}
+						}
+					}
 				} else if m.activeView == viewMusicArtistDetail {
 					if m.artistDetail.focusedUpper {
 						albumTitle, ok := m.artistDetail.SelectedAlbum()
@@ -414,7 +457,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "m":
 			if !m.focusedSide {
-				if m.activeView == viewMusicLibrary {
+				if m.activeView == viewMusicLibrary || m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
 					rows := m.trackList.table.Rows()
 					cursor := m.trackList.table.Cursor()
 					if cursor < len(rows) {
@@ -491,6 +534,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					var selectedTracks []db.TrackData
 					if m.activeView == viewMusicLibrary {
+						marked := m.trackList.MarkedPaths()
+						if len(marked) > 0 {
+							for _, t := range m.trackList.tracks {
+								for _, p := range marked {
+									if t.Path == p {
+										selectedTracks = append(selectedTracks, t)
+										break
+									}
+								}
+							}
+						} else {
+							cursor := m.trackList.table.Cursor()
+							if cursor >= 0 && cursor < len(m.trackList.tracks) {
+								selectedTracks = []db.TrackData{m.trackList.tracks[cursor]}
+							}
+						}
+					} else if m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
 						marked := m.trackList.MarkedPaths()
 						if len(marked) > 0 {
 							for _, t := range m.trackList.tracks {
@@ -599,6 +659,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.message = fmt.Sprintf("Scan finished: %d items found", msg.count)
 		if m.activeView == viewMusicLibrary {
 			m.refreshTrackList("", "")
+		} else if m.activeView == viewMusicRecent {
+			m.refreshRecentTracks()
+		} else if m.activeView == viewMusicFilter {
+			m.refreshFilterTracks(m.currentFilterID)
 		} else if m.activeView == viewVideoLibrary {
 			m.refreshVideoList()
 		}
@@ -652,7 +716,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.coverPlaceCmd())
 		}
 	} else {
-		if m.activeView == viewMusicLibrary {
+		if m.activeView == viewMusicLibrary || m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
 			var cmd tea.Cmd
 			m.trackList, cmd = m.trackList.Update(msg)
 			cmds = append(cmds, cmd)
@@ -675,7 +739,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) syncFocus() {
-	if m.activeView == viewMusicLibrary {
+	if m.activeView == viewMusicLibrary || m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
 		m.trackList.SetFocus(!m.focusedSide)
 	} else if m.activeView == viewMusicArtists {
 		m.musicArtists.SetFocus(!m.focusedSide)
@@ -756,6 +820,8 @@ func (m *model) setCoverFromPlaying() tea.Cmd {
 
 func (m *model) handleSidebarChange(n *node) tea.Cmd {
 	m.currentPlaylistID = 0
+	m.currentFilterID = 0
+	m.currentFilterName = ""
 
 	switch {
 	case n.id == "music_library":
@@ -765,6 +831,9 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 			sbWidth := m.getSidebarWidth()
 			m.musicArtists = newMusicArtists(m.width-sbWidth-1, m.height-8, artists)
 		}
+	case n.id == "music_recent":
+		m.activeView = viewMusicRecent
+		m.refreshRecentTracks()
 	case n.id == "video_library":
 		m.activeView = viewVideoLibrary
 		m.refreshVideoList()
@@ -780,6 +849,13 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 		artist, albumTitle := m.getCurrentFilter()
 		m.activeView = viewMusicLibrary
 		m.refreshTrackList(artist, albumTitle)
+	case strings.HasPrefix(n.id, "music_filter:"):
+		idStr := strings.TrimPrefix(n.id, "music_filter:")
+		id, _ := strconv.ParseInt(idStr, 10, 64)
+		m.currentFilterID = id
+		m.currentFilterName = n.label
+		m.activeView = viewMusicFilter
+		m.refreshFilterTracks(id)
 	case strings.HasPrefix(n.id, "music_playlist:"):
 		idStr := strings.TrimPrefix(n.id, "music_playlist:")
 		id, _ := strconv.ParseInt(idStr, 10, 64)
@@ -891,6 +967,26 @@ func (m model) getCurrentFilter() (string, string) {
 func (m *model) refreshTrackList(artist, albumTitle string) {
 	sbWidth := m.getSidebarWidth()
 	m.trackList = newTrackList(m.width-sbWidth-1, m.height-6, artist, albumTitle)
+	m.syncFocus()
+}
+
+func (m *model) refreshRecentTracks() {
+	sbWidth := m.getSidebarWidth()
+	tracks, _ := db.GetRecentMusicTracks(50)
+	m.trackList = newTrackListFromTracks(m.width-sbWidth-1, m.height-6, tracks)
+	m.syncFocus()
+}
+
+func (m *model) refreshFilterTracks(filterID int64) {
+	sbWidth := m.getSidebarWidth()
+	filter, err := db.GetMusicFilterByID(filterID)
+	if err != nil {
+		m.trackList = newTrackListFromTracks(m.width-sbWidth-1, m.height-6, nil)
+		m.syncFocus()
+		return
+	}
+	tracks, _ := db.GetFilteredMusicTracks(filter.ConditionsJSON, filter.SortJSON)
+	m.trackList = newTrackListFromTracks(m.width-sbWidth-1, m.height-6, tracks)
 	m.syncFocus()
 }
 
@@ -1220,7 +1316,7 @@ func (m model) View() string {
 
 	var mainContentStr string
 	switch m.activeView {
-	case viewMusicLibrary:
+	case viewMusicLibrary, viewMusicRecent, viewMusicFilter:
 		mainContentStr = m.trackList.View()
 	case viewMusicArtists:
 		mainContentStr = m.musicArtists.View()

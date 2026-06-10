@@ -17,6 +17,8 @@ const (
 	nodeAlbum
 	nodeMusicPlaylist
 	nodeVideoPlaylist
+	nodeRecentlyAdded
+	nodeMusicFilter
 )
 
 type node struct {
@@ -63,7 +65,26 @@ func newSidebar(width, height int) sidebar {
 		}
 	}
 
-	// 2. Music Playlists Node
+	// 2. Recently Added Node
+	recentNode := &node{label: "Recently Added", id: "music_recent", typ: nodeRecentlyAdded, level: 1}
+	musicNode.children = append(musicNode.children, recentNode)
+
+	// 3. Views Node (Music Filters)
+	viewsNode := &node{label: "Views", id: "music_views", typ: nodeCategory, expanded: false}
+	filters, err := db.GetMusicFilters()
+	if err == nil {
+		for _, f := range filters {
+			viewsNode.children = append(viewsNode.children, &node{
+				label: f.Name,
+				id:    fmt.Sprintf("music_filter:%d", f.ID),
+				typ:   nodeMusicFilter,
+				level: 1,
+			})
+		}
+	}
+	musicNode.children = append(musicNode.children, viewsNode)
+
+	// 4. Music Playlists Node
 	musicPlaylistNode := &node{label: "Music Playlists", id: "music_playlists", typ: nodeCategory, expanded: false}
 	playlists, err := db.GetMusicPlaylists()
 	if err == nil {
@@ -77,7 +98,7 @@ func newSidebar(width, height int) sidebar {
 		}
 	}
 
-	// 3. Video Playlists Node
+	// 5. Video Playlists Node
 	videoPlaylistNode := &node{label: "Video Playlists", id: "video_playlists", typ: nodeCategory, expanded: false}
 	vPlaylists, err := db.GetVideoPlaylists()
 	if err == nil {
@@ -125,7 +146,26 @@ func (s *sidebar) Refresh() {
 		}
 	}
 
-	// 2. Music Playlists Node
+	// 2. Recently Added Node
+	recentNode := &node{label: "Recently Added", id: "music_recent", typ: nodeRecentlyAdded, level: 1}
+	musicNode.children = append(musicNode.children, recentNode)
+
+	// 3. Views Node (Music Filters)
+	viewsNode := &node{label: "Views", id: "music_views", typ: nodeCategory, expanded: false}
+	filters, err := db.GetMusicFilters()
+	if err == nil {
+		for _, f := range filters {
+			viewsNode.children = append(viewsNode.children, &node{
+				label: f.Name,
+				id:    fmt.Sprintf("music_filter:%d", f.ID),
+				typ:   nodeMusicFilter,
+				level: 1,
+			})
+		}
+	}
+	musicNode.children = append(musicNode.children, viewsNode)
+
+	// 4. Music Playlists Node
 	musicPlaylistNode := &node{label: "Music Playlists", id: "music_playlists", typ: nodeCategory, expanded: false}
 	playlists, err := db.GetMusicPlaylists()
 	if err == nil {
@@ -139,7 +179,7 @@ func (s *sidebar) Refresh() {
 		}
 	}
 
-	// 3. Video Playlists Node
+	// 5. Video Playlists Node
 	videoPlaylistNode := &node{label: "Video Playlists", id: "video_playlists", typ: nodeCategory, expanded: false}
 	vPlaylists, err := db.GetVideoPlaylists()
 	if err == nil {
