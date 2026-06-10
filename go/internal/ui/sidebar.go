@@ -70,7 +70,7 @@ func newSidebar(width, height int) sidebar {
 	musicNode.children = append(musicNode.children, recentNode)
 
 	// 3. Views Node (Music Filters)
-	viewsNode := &node{label: "Views", id: "music_views", typ: nodeCategory, expanded: false}
+	viewsNode := &node{label: "Views", id: "music_views", typ: nodeCategory, expanded: false, level: 1}
 	filters, err := db.GetMusicFilters()
 	if err == nil {
 		for _, f := range filters {
@@ -78,7 +78,7 @@ func newSidebar(width, height int) sidebar {
 				label: f.Name,
 				id:    fmt.Sprintf("music_filter:%d", f.ID),
 				typ:   nodeMusicFilter,
-				level: 1,
+				level: 2,
 			})
 		}
 	}
@@ -151,7 +151,7 @@ func (s *sidebar) Refresh() {
 	musicNode.children = append(musicNode.children, recentNode)
 
 	// 3. Views Node (Music Filters)
-	viewsNode := &node{label: "Views", id: "music_views", typ: nodeCategory, expanded: false}
+	viewsNode := &node{label: "Views", id: "music_views", typ: nodeCategory, expanded: false, level: 1}
 	filters, err := db.GetMusicFilters()
 	if err == nil {
 		for _, f := range filters {
@@ -159,7 +159,7 @@ func (s *sidebar) Refresh() {
 				label: f.Name,
 				id:    fmt.Sprintf("music_filter:%d", f.ID),
 				typ:   nodeMusicFilter,
-				level: 1,
+				level: 2,
 			})
 		}
 	}
@@ -310,7 +310,7 @@ func (s sidebar) View(focused bool) string {
 	for i, n := range s.visibleRows {
 		indent := strings.Repeat("  ", n.level)
 		
-		prefix := "  "
+		prefix := ""
 		if len(n.children) > 0 {
 			if n.expanded {
 				prefix = "▼ "
