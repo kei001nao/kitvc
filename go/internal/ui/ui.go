@@ -484,14 +484,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", m.currentFilterName))
 				m.modal.SetSize(m.width, m.height)
 				return m, nil
-			} else if m.focusedSide {
-				sel := m.sidebar.SelectedNode()
-				if sel != nil && strings.HasPrefix(sel.id, "music_playlist:") {
-					m.pendingAction = actionDeletePlaylist
-					m.modal = newConfirmModal("Delete playlist '" + sel.label + "'?")
-					m.modal.SetSize(m.width, m.height)
-				}
-				return m, nil
+		} else if m.focusedSide {
+			sel := m.sidebar.SelectedNode()
+			if sel != nil && strings.HasPrefix(sel.id, "music_playlist:") {
+				m.pendingAction = actionDeletePlaylist
+				m.modal = newConfirmModal("Delete playlist '" + sel.label + "'?")
+				m.modal.SetSize(m.width, m.height)
+			} else if sel != nil && strings.HasPrefix(sel.id, "music_filter:") {
+				idStr := strings.TrimPrefix(sel.id, "music_filter:")
+				id, _ := strconv.ParseInt(idStr, 10, 64)
+				m.currentFilterID = id
+				m.currentFilterName = sel.label
+				m.pendingAction = actionDeleteMusicFilter
+				m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", sel.label))
+				m.modal.SetSize(m.width, m.height)
+			}
+			return m, nil
 			}
 		case "shift+up":
 			if !m.focusedSide && m.currentPlaylistID > 0 && m.activeView == viewMusicLibrary {
