@@ -46,7 +46,7 @@ func newSidebar(width, height int) sidebar {
 	}
 
 	// 1. Music Library Node
-	musicNode := &node{label: "Music Library", id: "music_library", typ: nodeCategory, expanded: false}
+	musicNode := &node{label: "Music Library", id: "music_library", typ: nodeCategory, expanded: true}
 	
 	artists, albums, err := db.GetMusicArtistsAndAlbums()
 	if err == nil {
@@ -128,7 +128,7 @@ func (s *sidebar) Refresh() {
 	s.nodes = []*node{}
 
 	// 1. Music Library Node
-	musicNode := &node{label: "Music Library", id: "music_library", typ: nodeCategory, expanded: false}
+	musicNode := &node{label: "Music Library", id: "music_library", typ: nodeCategory, expanded: true}
 	artists, albums, err := db.GetMusicArtistsAndAlbums()
 	if err == nil {
 		for _, artist := range artists {
