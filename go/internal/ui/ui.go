@@ -42,6 +42,8 @@ const (
 	actionEditTrack
 	actionEditAlbum
 	actionCreateMusicFilter
+	actionEditMusicFilter
+	actionDeleteMusicFilter
 )
 
 type model struct {
@@ -72,6 +74,9 @@ type model struct {
 	playingAlbumID    int64
 	currentFilterID   int64
 	currentFilterName string
+	filterEdit        *filterEditModal
+	filterCondEdit    *filterConditionModal
+	sortFieldSelect   *sortFieldSelectModal
 }
 
 func InitialModel(cfg *config.Config) model {
@@ -98,6 +103,152 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle filter edit modal
+	if m.filterEdit != nil {
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			// Handle nested modals first
+			if m.filterCondEdit != nil {
+				updated, result, cmd := m.filterCondEdit.Update(keyMsg)
+				m.filterCondEdit = updated
+				if result.closed {
+					if result.submitted {
+						// Add or update condition
+						if m.filterEdit.condCursor >= 0 && m.filterEdit.condCursor < len(m.filterEdit.conditions) {
+							m.filterEdit.conditions[m.filterEdit.condCursor] = result.condition
+						} else {
+							m.filterEdit.conditions = append(m.filterEdit.conditions, result.condition)
+						}
+					}
+					m.filterCondEdit = nil
+				}
+				return m, cmd
+			}
+			if m.sortFieldSelect != nil {
+				updated, result, cmd := m.sortFieldSelect.Update(keyMsg)
+				m.sortFieldSelect = updated
+				if result.closed {
+					if result.submitted {
+						dir := "ASC"
+						if len(m.filterEdit.sortSequence) > 0 {
+							dir = "DESC"
+						}
+						m.filterEdit.sortSequence = append(m.filterEdit.sortSequence, [2]string{result.field, dir})
+					}
+					m.sortFieldSelect = nil
+				}
+				return m, cmd
+			}
+
+			// Handle filter edit actions
+			switch keyMsg.String() {
+			case "a":
+				if m.filterEdit.focusedSection == 1 {
+					// Add condition
+					m.filterCondEdit = newFilterConditionModal(0, 0, "")
+					m.filterCondEdit.SetSize(m.width, m.height)
+					return m, nil
+				} else if m.filterEdit.focusedSection == 2 {
+					// Add sort field
+					usedFields := make(map[string]bool)
+					for _, s := range m.filterEdit.sortSequence {
+						usedFields[s[0]] = true
+					}
+					m.sortFieldSelect = newSortFieldSelectModal(usedFields)
+					m.sortFieldSelect.SetSize(m.width, m.height)
+					return m, nil
+				}
+			case "enter":
+				if m.filterEdit.focusedSection == 1 && len(m.filterEdit.conditions) > 0 {
+					// Edit condition
+					c := m.filterEdit.conditions[m.filterEdit.condCursor]
+					fieldIdx := 0
+					for i, f := range musicFilterFields {
+						if f.Value == c.Field {
+							fieldIdx = i
+							break
+						}
+					}
+					opIdx := 0
+					for i, o := range musicFilterOps {
+						if o.Value == c.Op {
+							opIdx = i
+							break
+						}
+					}
+					m.filterCondEdit = newFilterConditionModal(fieldIdx, opIdx, c.Value)
+					m.filterCondEdit.SetSize(m.width, m.height)
+					return m, nil
+				}
+			case "d":
+				if m.filterEdit.focusedSection == 1 && len(m.filterEdit.conditions) > 0 {
+					// Delete condition
+					m.filterEdit.conditions = append(m.filterEdit.conditions[:m.filterEdit.condCursor], m.filterEdit.conditions[m.filterEdit.condCursor+1:]...)
+					if m.filterEdit.condCursor >= len(m.filterEdit.conditions) {
+						m.filterEdit.condCursor = len(m.filterEdit.conditions) - 1
+					}
+					if m.filterEdit.condCursor < 0 {
+						m.filterEdit.condCursor = 0
+					}
+					return m, nil
+				} else if m.filterEdit.focusedSection == 2 && len(m.filterEdit.sortSequence) > 0 {
+					// Delete sort field
+					m.filterEdit.sortSequence = append(m.filterEdit.sortSequence[:m.filterEdit.sortCursor], m.filterEdit.sortSequence[m.filterEdit.sortCursor+1:]...)
+					if m.filterEdit.sortCursor >= len(m.filterEdit.sortSequence) {
+						m.filterEdit.sortCursor = len(m.filterEdit.sortSequence) - 1
+					}
+					if m.filterEdit.sortCursor < 0 {
+						m.filterEdit.sortCursor = 0
+					}
+					return m, nil
+				}
+			case "+", "=":
+				if m.filterEdit.focusedSection == 2 && len(m.filterEdit.sortSequence) > 0 {
+					// Move sort up
+					idx := m.filterEdit.sortCursor
+					if idx > 0 {
+						m.filterEdit.sortSequence[idx], m.filterEdit.sortSequence[idx-1] = m.filterEdit.sortSequence[idx-1], m.filterEdit.sortSequence[idx]
+						m.filterEdit.sortCursor--
+					}
+					return m, nil
+				}
+			case "-":
+				if m.filterEdit.focusedSection == 2 && len(m.filterEdit.sortSequence) > 0 {
+					// Move sort down
+					idx := m.filterEdit.sortCursor
+					if idx < len(m.filterEdit.sortSequence)-1 {
+						m.filterEdit.sortSequence[idx], m.filterEdit.sortSequence[idx+1] = m.filterEdit.sortSequence[idx+1], m.filterEdit.sortSequence[idx]
+						m.filterEdit.sortCursor++
+					}
+					return m, nil
+				}
+			}
+		}
+
+		updated, result, cmd := m.filterEdit.Update(msg)
+		m.filterEdit = updated
+		if result.closed {
+			if result.submitted {
+				if m.pendingAction == actionCreateMusicFilter {
+					db.CreateMusicFilter(result.name, result.condJSON, result.sortJSON)
+					m.message = fmt.Sprintf("Created view '%s'", result.name)
+					m.sidebar.Refresh()
+				} else if m.pendingAction == actionEditMusicFilter {
+					db.UpdateMusicFilter(m.currentFilterID, result.name, result.condJSON, result.sortJSON)
+					m.message = fmt.Sprintf("Updated view '%s'", result.name)
+					m.currentFilterName = result.name
+					m.sidebar.Refresh()
+					// Refresh the current filter view
+					m.refreshFilterTracks(m.currentFilterID)
+				}
+			}
+			m.filterEdit = nil
+			m.filterCondEdit = nil
+			m.sortFieldSelect = nil
+			m.pendingAction = actionNone
+		}
+		return m, cmd
+	}
+
 	if m.modal != nil {
 		updated, result, cmd := m.modal.Update(msg)
 		m.modal = updated
@@ -328,6 +479,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				return m, nil
+			} else if !m.focusedSide && m.activeView == viewMusicFilter && m.currentFilterID > 0 {
+				m.pendingAction = actionDeleteMusicFilter
+				m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", m.currentFilterName))
+				m.modal.SetSize(m.width, m.height)
+				return m, nil
 			} else if m.focusedSide {
 				sel := m.sidebar.SelectedNode()
 				if sel != nil && strings.HasPrefix(sel.id, "music_playlist:") {
@@ -459,8 +615,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				sel := m.sidebar.SelectedNode()
 				if sel != nil && sel.id == "music_views" {
 					m.pendingAction = actionCreateMusicFilter
-					m.modal = newTextInputModal("New View Name:", "Enter view name...", "Enter: Create  Esc: Cancel")
-					m.modal.SetSize(m.width, m.height)
+					m.filterEdit = newFilterEditModal("", "[]", "[]")
+					m.filterEdit.SetSize(m.width, m.height)
 				}
 			}
 			return m, nil
@@ -512,7 +668,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "e":
-			if !m.focusedSide {
+			if !m.focusedSide && m.activeView == viewMusicFilter && m.currentFilterID > 0 {
+				filter, err := db.GetMusicFilterByID(m.currentFilterID)
+				if err == nil {
+					m.pendingAction = actionEditMusicFilter
+					m.filterEdit = newFilterEditModal(filter.Name, filter.ConditionsJSON, filter.SortJSON)
+					m.filterEdit.SetSize(m.width, m.height)
+				}
+				return m, nil
+			} else if !m.focusedSide {
 				if m.activeView == viewMusicArtistDetail && m.artistDetail.focusedUpper {
 					cursor := m.artistDetail.albumsTable.Cursor()
 					if cursor < 0 || cursor >= len(m.artistDetail.albums) {
@@ -1178,12 +1342,15 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		m.editAlbumID = 0
 
 	case actionCreateMusicFilter:
-		name := strings.TrimSpace(result.text)
-		if name != "" {
-			db.CreateMusicFilter(name, "[]", "[]")
-			m.message = fmt.Sprintf("Created view '%s'", name)
-			m.sidebar.Refresh()
-		}
+		m.modal = nil
+
+	case actionDeleteMusicFilter:
+		db.DeleteMusicFilter(m.currentFilterID)
+		m.message = fmt.Sprintf("Deleted view '%s'", m.currentFilterName)
+		m.currentFilterID = 0
+		m.currentFilterName = ""
+		m.activeView = viewMusicArtists
+		m.sidebar.Refresh()
 		m.modal = nil
 	}
 
@@ -1374,6 +1541,134 @@ func (m model) View() string {
 			}
 
 			// find dialog visual width for centering
+			dialogW := 0
+			for _, line := range dialogLines {
+				if w := lipgloss.Width(line); w > dialogW {
+					dialogW = w
+				}
+			}
+			leftPad := (m.width - dialogW) / 2
+			if leftPad < 0 {
+				leftPad = 0
+			}
+			padStr := strings.Repeat(" ", leftPad)
+
+			for i := 0; i < dialogH && startRow+i < len(contentLines); i++ {
+				contentLines[startRow+i] = padStr + dialogLines[i]
+			}
+		}
+
+		mainView = lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			strings.Join(contentLines, "\n"),
+			footer,
+		)
+	}
+
+	// Render filter edit modal
+	if m.filterEdit != nil {
+		m.filterEdit.SetSize(m.width, m.height)
+		overlay := m.filterEdit.View()
+		contentArea := lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr))
+		contentLines := strings.Split(contentArea, "\n")
+		dialogLines := strings.Split(overlay, "\n")
+
+		for len(dialogLines) > 0 && dialogLines[len(dialogLines)-1] == "" {
+			dialogLines = dialogLines[:len(dialogLines)-1]
+		}
+
+		dialogH := len(dialogLines)
+		if dialogH > 0 {
+			startRow := (len(contentLines) - dialogH) / 2
+			if startRow < 0 {
+				startRow = 0
+			}
+
+			dialogW := 0
+			for _, line := range dialogLines {
+				if w := lipgloss.Width(line); w > dialogW {
+					dialogW = w
+				}
+			}
+			leftPad := (m.width - dialogW) / 2
+			if leftPad < 0 {
+				leftPad = 0
+			}
+			padStr := strings.Repeat(" ", leftPad)
+
+			for i := 0; i < dialogH && startRow+i < len(contentLines); i++ {
+				contentLines[startRow+i] = padStr + dialogLines[i]
+			}
+		}
+
+		mainView = lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			strings.Join(contentLines, "\n"),
+			footer,
+		)
+	}
+
+	// Render nested modals
+	if m.filterCondEdit != nil {
+		m.filterCondEdit.SetSize(m.width, m.height)
+		overlay := m.filterCondEdit.View()
+		contentArea := lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr))
+		contentLines := strings.Split(contentArea, "\n")
+		dialogLines := strings.Split(overlay, "\n")
+
+		for len(dialogLines) > 0 && dialogLines[len(dialogLines)-1] == "" {
+			dialogLines = dialogLines[:len(dialogLines)-1]
+		}
+
+		dialogH := len(dialogLines)
+		if dialogH > 0 {
+			startRow := (len(contentLines) - dialogH) / 2
+			if startRow < 0 {
+				startRow = 0
+			}
+
+			dialogW := 0
+			for _, line := range dialogLines {
+				if w := lipgloss.Width(line); w > dialogW {
+					dialogW = w
+				}
+			}
+			leftPad := (m.width - dialogW) / 2
+			if leftPad < 0 {
+				leftPad = 0
+			}
+			padStr := strings.Repeat(" ", leftPad)
+
+			for i := 0; i < dialogH && startRow+i < len(contentLines); i++ {
+				contentLines[startRow+i] = padStr + dialogLines[i]
+			}
+		}
+
+		mainView = lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			strings.Join(contentLines, "\n"),
+			footer,
+		)
+	}
+
+	if m.sortFieldSelect != nil {
+		m.sortFieldSelect.SetSize(m.width, m.height)
+		overlay := m.sortFieldSelect.View()
+		contentArea := lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr))
+		contentLines := strings.Split(contentArea, "\n")
+		dialogLines := strings.Split(overlay, "\n")
+
+		for len(dialogLines) > 0 && dialogLines[len(dialogLines)-1] == "" {
+			dialogLines = dialogLines[:len(dialogLines)-1]
+		}
+
+		dialogH := len(dialogLines)
+		if dialogH > 0 {
+			startRow := (len(contentLines) - dialogH) / 2
+			if startRow < 0 {
+				startRow = 0
+			}
+
 			dialogW := 0
 			for _, line := range dialogLines {
 				if w := lipgloss.Width(line); w > dialogW {
