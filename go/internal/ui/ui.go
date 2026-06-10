@@ -41,6 +41,7 @@ const (
 	actionRemoveTrack
 	actionEditTrack
 	actionEditAlbum
+	actionCreateMusicFilter
 )
 
 type model struct {
@@ -454,6 +455,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "n":
+			if m.focusedSide {
+				sel := m.sidebar.SelectedNode()
+				if sel != nil && sel.id == "music_views" {
+					m.pendingAction = actionCreateMusicFilter
+					m.modal = newTextInputModal("New View Name:", "Enter view name...", "Enter: Create  Esc: Cancel")
+					m.modal.SetSize(m.width, m.height)
+				}
+			}
 			return m, nil
 		case "m":
 			if !m.focusedSide {
@@ -1167,6 +1176,15 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		m.editFieldNames = nil
 		m.editPaths = nil
 		m.editAlbumID = 0
+
+	case actionCreateMusicFilter:
+		name := strings.TrimSpace(result.text)
+		if name != "" {
+			db.CreateMusicFilter(name, "[]", "[]")
+			m.message = fmt.Sprintf("Created view '%s'", name)
+			m.sidebar.Refresh()
+		}
+		m.modal = nil
 	}
 
 	return m
