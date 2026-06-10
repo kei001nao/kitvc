@@ -229,6 +229,26 @@ func (s *sidebar) SelectByID(id string) bool {
 	return false
 }
 
+func (s *sidebar) ExpandByID(id string) bool {
+	var expand func(nodes []*node) bool
+	expand = func(nodes []*node) bool {
+		for _, n := range nodes {
+			if n.id == id {
+				n.expanded = true
+				s.rebuildVisible()
+				return true
+			}
+			if len(n.children) > 0 {
+				if expand(n.children) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return expand(s.nodes)
+}
+
 func (s sidebar) SelectedNode() *node {
 	if s.cursor >= 0 && s.cursor < len(s.visibleRows) {
 		return s.visibleRows[s.cursor]

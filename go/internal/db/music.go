@@ -409,9 +409,12 @@ func GetMusicFilterByID(id int64) (*MusicFilter, error) {
 	return &f, nil
 }
 
-func CreateMusicFilter(name, conditionsJSON, sortJSON string) error {
-	_, err := db.Exec("INSERT INTO music_filters (name, conditions_json, sort_json) VALUES (?, ?, ?)", name, conditionsJSON, sortJSON)
-	return err
+func CreateMusicFilter(name, conditionsJSON, sortJSON string) (int64, error) {
+	result, err := db.Exec("INSERT INTO music_filters (name, conditions_json, sort_json) VALUES (?, ?, ?)", name, conditionsJSON, sortJSON)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
 }
 
 func UpdateMusicFilter(id int64, name, conditionsJSON, sortJSON string) error {

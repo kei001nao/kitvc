@@ -23,3 +23,8 @@
 [INFORMATION] Added to 'My Playlist'
 [INFORMATION] Added to 'My Playlist'
 [INFORMATION] Added to 'test'
+[INFORMATION] Scanning local files...
+[INFORMATION] Fetching metadata (1/4): Nulbarich - H.O.T
+[INFORMATION] Online metadata fetch complete!
+[INFORMATION] Scanning video library...
+[INFORMATION] Library scan complete!

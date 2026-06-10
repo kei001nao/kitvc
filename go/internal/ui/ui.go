@@ -128,11 +128,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sortFieldSelect = updated
 				if result.closed {
 					if result.submitted {
-						dir := "ASC"
-						if len(m.filterEdit.sortSequence) > 0 {
-							dir = "DESC"
-						}
-						m.filterEdit.sortSequence = append(m.filterEdit.sortSequence, [2]string{result.field, dir})
+						m.filterEdit.sortSequence = append(m.filterEdit.sortSequence, [2]string{result.field, result.direction})
 					}
 					m.sortFieldSelect = nil
 				}
@@ -142,12 +138,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Handle filter edit actions
 			switch keyMsg.String() {
 			case "a":
-				if m.filterEdit.focusedSection == 1 {
-					// Add condition
+				if m.filterEdit.focusedSection == 2 {
+					// Add condition - set condCursor to -1 so it appends
+					m.filterEdit.condCursor = -1
 					m.filterCondEdit = newFilterConditionModal(0, 0, "")
 					m.filterCondEdit.SetSize(m.width, m.height)
 					return m, nil
-				} else if m.filterEdit.focusedSection == 2 {
+				} else if m.filterEdit.focusedSection == 3 {
 					// Add sort field
 					usedFields := make(map[string]bool)
 					for _, s := range m.filterEdit.sortSequence {
@@ -158,7 +155,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			case "enter":
-				if m.filterEdit.focusedSection == 1 && len(m.filterEdit.conditions) > 0 {
+				if m.filterEdit.focusedSection == 2 && len(m.filterEdit.conditions) > 0 && m.filterEdit.condCursor >= 0 {
 					// Edit condition
 					c := m.filterEdit.conditions[m.filterEdit.condCursor]
 					fieldIdx := 0
@@ -180,7 +177,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			case "d":
-				if m.filterEdit.focusedSection == 1 && len(m.filterEdit.conditions) > 0 {
+				if m.filterEdit.focusedSection == 2 && len(m.filterEdit.conditions) > 0 {
 					// Delete condition
 					m.filterEdit.conditions = append(m.filterEdit.conditions[:m.filterEdit.condCursor], m.filterEdit.conditions[m.filterEdit.condCursor+1:]...)
 					if m.filterEdit.condCursor >= len(m.filterEdit.conditions) {
@@ -190,7 +187,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.filterEdit.condCursor = 0
 					}
 					return m, nil
-				} else if m.filterEdit.focusedSection == 2 && len(m.filterEdit.sortSequence) > 0 {
+				} else if m.filterEdit.focusedSection == 3 && len(m.filterEdit.sortSequence) > 0 && m.filterEdit.sortCursor >= 0 {
 					// Delete sort field
 					m.filterEdit.sortSequence = append(m.filterEdit.sortSequence[:m.filterEdit.sortCursor], m.filterEdit.sortSequence[m.filterEdit.sortCursor+1:]...)
 					if m.filterEdit.sortCursor >= len(m.filterEdit.sortSequence) {
@@ -202,7 +199,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			case "+", "=":
-				if m.filterEdit.focusedSection == 2 && len(m.filterEdit.sortSequence) > 0 {
+				if m.filterEdit.focusedSection == 3 && len(m.filterEdit.sortSequence) > 0 && m.filterEdit.sortCursor >= 0 {
 					// Move sort up
 					idx := m.filterEdit.sortCursor
 					if idx > 0 {
@@ -212,7 +209,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			case "-":
-				if m.filterEdit.focusedSection == 2 && len(m.filterEdit.sortSequence) > 0 {
+				if m.filterEdit.focusedSection == 3 && len(m.filterEdit.sortSequence) > 0 && m.filterEdit.sortCursor >= 0 {
 					// Move sort down
 					idx := m.filterEdit.sortCursor
 					if idx < len(m.filterEdit.sortSequence)-1 {
@@ -229,15 +226,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if result.closed {
 			if result.submitted {
 				if m.pendingAction == actionCreateMusicFilter {
-					db.CreateMusicFilter(result.name, result.condJSON, result.sortJSON)
-					m.message = fmt.Sprintf("Created view '%s'", result.name)
-					m.sidebar.Refresh()
+					newID, err := db.CreateMusicFilter(result.name, result.condJSON, result.sortJSON)
+					if err == nil {
+						m.message = fmt.Sprintf("Created view '%s'", result.name)
+						m.currentFilterID = newID
+						m.currentFilterName = result.name
+						m.sidebar.Refresh()
+						m.sidebar.ExpandByID("music_views")
+						m.sidebar.SelectByID(fmt.Sprintf("music_filter:%d", newID))
+						m.activeView = viewMusicFilter
+						m.refreshFilterTracks(newID)
+					}
 				} else if m.pendingAction == actionEditMusicFilter {
 					db.UpdateMusicFilter(m.currentFilterID, result.name, result.condJSON, result.sortJSON)
 					m.message = fmt.Sprintf("Updated view '%s'", result.name)
 					m.currentFilterName = result.name
 					m.sidebar.Refresh()
-					// Refresh the current filter view
+					m.sidebar.ExpandByID("music_views")
+					m.sidebar.SelectByID(fmt.Sprintf("music_filter:%d", m.currentFilterID))
 					m.refreshFilterTracks(m.currentFilterID)
 				}
 			}
@@ -628,6 +634,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case "e":
+			if m.focusedSide {
+				sel := m.sidebar.SelectedNode()
+				if sel != nil && strings.HasPrefix(sel.id, "music_filter:") {
+					idStr := strings.TrimPrefix(sel.id, "music_filter:")
+					id, _ := strconv.ParseInt(idStr, 10, 64)
+					filter, err := db.GetMusicFilterByID(id)
+					if err == nil {
+						m.currentFilterID = id
+						m.pendingAction = actionEditMusicFilter
+						m.filterEdit = newFilterEditModal(filter.Name, filter.ConditionsJSON, filter.SortJSON)
+						m.filterEdit.SetSize(m.width, m.height)
+					}
+				}
+			} else if !m.focusedSide && m.activeView == viewMusicFilter && m.currentFilterID > 0 {
+				filter, err := db.GetMusicFilterByID(m.currentFilterID)
+				if err == nil {
+					m.pendingAction = actionEditMusicFilter
+					m.filterEdit = newFilterEditModal(filter.Name, filter.ConditionsJSON, filter.SortJSON)
+					m.filterEdit.SetSize(m.width, m.height)
+				}
+			}
+			return m, nil
 		case "m":
 			if !m.focusedSide {
 				if m.activeView == viewMusicLibrary || m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
@@ -675,144 +704,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
-		case "e":
-			if !m.focusedSide && m.activeView == viewMusicFilter && m.currentFilterID > 0 {
-				filter, err := db.GetMusicFilterByID(m.currentFilterID)
-				if err == nil {
-					m.pendingAction = actionEditMusicFilter
-					m.filterEdit = newFilterEditModal(filter.Name, filter.ConditionsJSON, filter.SortJSON)
-					m.filterEdit.SetSize(m.width, m.height)
-				}
-				return m, nil
-			} else if !m.focusedSide {
-				if m.activeView == viewMusicArtistDetail && m.artistDetail.focusedUpper {
-					cursor := m.artistDetail.albumsTable.Cursor()
-					if cursor < 0 || cursor >= len(m.artistDetail.albums) {
-						return m, nil
-					}
-					album := m.artistDetail.albums[cursor]
-
-					m.pendingAction = actionEditAlbum
-					m.editAlbumID = album.ID
-					m.editFieldNames = []string{"artist", "album", "release_date"}
-
-					allTracks, err := db.GetMusicTracksByAlbumID(album.ID)
-					if err != nil {
-						allTracks = nil
-					}
-					m.editPaths = make([]string, len(allTracks))
-					for i, t := range allTracks {
-						m.editPaths[i] = t.Path
-					}
-
-					m.modal = newFormModal("Edit Album",
-						[]string{"Artist", "Album", "Date"},
-						[]string{album.Artist, album.Title, album.ReleaseDate},
-						"Tab: Next  Enter: Save  Esc: Cancel")
-					if m.modal != nil {
-						m.modal.SetSize(m.width, m.height)
-					}
-				} else {
-					var selectedTracks []db.TrackData
-					if m.activeView == viewMusicLibrary {
-						marked := m.trackList.MarkedPaths()
-						if len(marked) > 0 {
-							for _, t := range m.trackList.tracks {
-								for _, p := range marked {
-									if t.Path == p {
-										selectedTracks = append(selectedTracks, t)
-										break
-									}
-								}
-							}
-						} else {
-							cursor := m.trackList.table.Cursor()
-							if cursor >= 0 && cursor < len(m.trackList.tracks) {
-								selectedTracks = []db.TrackData{m.trackList.tracks[cursor]}
-							}
-						}
-					} else if m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
-						marked := m.trackList.MarkedPaths()
-						if len(marked) > 0 {
-							for _, t := range m.trackList.tracks {
-								for _, p := range marked {
-									if t.Path == p {
-										selectedTracks = append(selectedTracks, t)
-										break
-									}
-								}
-							}
-						} else {
-							cursor := m.trackList.table.Cursor()
-							if cursor >= 0 && cursor < len(m.trackList.tracks) {
-								selectedTracks = []db.TrackData{m.trackList.tracks[cursor]}
-							}
-						}
-					} else if m.activeView == viewMusicArtistDetail && !m.artistDetail.focusedUpper {
-						marked := m.artistDetail.MarkedTracks()
-						if len(marked) > 0 {
-							for _, t := range m.artistDetail.tracks {
-								for _, p := range marked {
-									if t.Path == p {
-										selectedTracks = append(selectedTracks, t)
-										break
-									}
-								}
-							}
-						} else {
-							track, ok := m.artistDetail.SelectedTrack()
-							if ok {
-								selectedTracks = []db.TrackData{track}
-							}
-						}
-					}
-
-					if len(selectedTracks) == 0 {
-						return m, nil
-					}
-
-					m.editPaths = make([]string, len(selectedTracks))
-					for i, t := range selectedTracks {
-						m.editPaths[i] = t.Path
-					}
-
-					m.editFieldNames = []string{"title", "genre"}
-					labels := []string{"Title", "Genre"}
-					initialValues := make([]string, 2)
-					for i, field := range m.editFieldNames {
-						var commonVal string
-						allSame := true
-						for j, t := range selectedTracks {
-							var val string
-							switch field {
-							case "title":
-								val = t.Title
-							case "genre":
-								val = t.Genre
-							}
-							if j == 0 {
-								commonVal = val
-							} else if val != commonVal {
-								allSame = false
-								break
-							}
-						}
-						if allSame {
-							initialValues[i] = commonVal
-						}
-					}
-
-					m.pendingAction = actionEditTrack
-					m.modal = newFormModal(
-						fmt.Sprintf("Edit Track (%d)", len(selectedTracks)),
-						labels, initialValues,
-						"Tab: Next  Enter: Save  Esc: Cancel")
-					if m.modal != nil {
-						m.modal.SetSize(m.width, m.height)
-					}
-				}
-				return m, nil
-			}
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width

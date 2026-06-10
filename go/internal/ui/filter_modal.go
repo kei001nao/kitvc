@@ -39,7 +39,7 @@ type filterCondition struct {
 }
 
 type filterEditModal struct {
-	name           string
+	nameInput      textinput.Model
 	conditions     []filterCondition
 	sortSequence   [][2]string
 	matchType      string
@@ -60,8 +60,16 @@ type filterEditResult struct {
 
 func newFilterEditModal(name string, conditionsJSON, sortJSON string) *filterEditModal {
 	var conditions []filterCondition
+
+	// Parse the conditions JSON which has format: {"op":"and","rules":[...]}
 	if conditionsJSON != "" && conditionsJSON != "[]" {
-		json.Unmarshal([]byte(conditionsJSON), &conditions)
+		var condData struct {
+			Op    string             `json:"op"`
+			Rules []filterCondition `json:"rules"`
+		}
+		if err := json.Unmarshal([]byte(conditionsJSON), &condData); err == nil {
+			conditions = condData.Rules
+		}
 	}
 	if conditions == nil {
 		conditions = []filterCondition{}
@@ -80,11 +88,18 @@ func newFilterEditModal(name string, conditionsJSON, sortJSON string) *filterEdi
 		matchType = "or"
 	}
 
+	ti := textinput.New()
+	ti.SetValue(name)
+	ti.Placeholder = "Enter view name..."
+	ti.Focus()
+	ti.CharLimit = 100
+	ti.Width = 40
+
 	return &filterEditModal{
-		name:       name,
-		conditions: conditions,
+		nameInput:    ti,
+		conditions:   conditions,
 		sortSequence: sortSeq,
-		matchType:  matchType,
+		matchType:    matchType,
 	}
 }
 
@@ -94,12 +109,48 @@ func (m *filterEditModal) Update(msg tea.Msg) (*filterEditModal, filterEditResul
 		return m, filterEditResult{}, nil
 	}
 
+	// Handle text input when focused on name section
+	if m.focusedSection == 0 && m.nameInput.Focused() {
+		switch keyMsg.String() {
+		case "tab":
+			m.nameInput.Blur()
+			m.focusedSection = 1
+			return m, filterEditResult{}, nil
+		case "shift+tab":
+			m.nameInput.Blur()
+			m.focusedSection = 3
+			return m, filterEditResult{}, nil
+		case "esc":
+			return m, filterEditResult{closed: true}, nil
+		case "ctrl+j", "enter":
+			if m.nameInput.Value() == "" {
+				return m, filterEditResult{}, nil
+			}
+			condData := map[string]interface{}{
+				"op":    m.matchType,
+				"rules": m.conditions,
+			}
+			condJSON, _ := json.Marshal(condData)
+			sortJSON, _ := json.Marshal(m.sortSequence)
+			return m, filterEditResult{
+				closed:    true,
+				submitted: true,
+				name:      m.nameInput.Value(),
+				condJSON:  string(condJSON),
+				sortJSON:  string(sortJSON),
+			}, nil
+		}
+		var cmd tea.Cmd
+		m.nameInput, cmd = m.nameInput.Update(msg)
+		return m, filterEditResult{}, cmd
+	}
+
 	switch keyMsg.String() {
 	case "esc":
 		return m, filterEditResult{closed: true}, nil
 
-	case "ctrl+enter", "ctrl+j":
-		if m.name == "" {
+	case "ctrl+j", "enter":
+		if m.nameInput.Value() == "" {
 			return m, filterEditResult{}, nil
 		}
 		condData := map[string]interface{}{
@@ -111,50 +162,70 @@ func (m *filterEditModal) Update(msg tea.Msg) (*filterEditModal, filterEditResul
 		return m, filterEditResult{
 			closed:    true,
 			submitted: true,
-			name:      m.name,
+			name:      m.nameInput.Value(),
 			condJSON:  string(condJSON),
 			sortJSON:  string(sortJSON),
 		}, nil
 
-	case "tab", "down":
-		m.focusedSection = (m.focusedSection + 1) % 3
-	case "shift+tab", "up":
-		m.focusedSection = (m.focusedSection - 1 + 3) % 3
-
-	case "left":
+	case "tab":
+		// Move to next section
+		m.focusedSection = (m.focusedSection + 1) % 4
 		if m.focusedSection == 0 {
-			m.matchType = "and"
+			m.nameInput.Focus()
 		}
-	case "right":
+	case "shift+tab":
+		// Move to previous section
+		m.focusedSection = (m.focusedSection - 1 + 4) % 4
 		if m.focusedSection == 0 {
-			m.matchType = "or"
+			m.nameInput.Focus()
 		}
 
-	case "j":
-		if m.focusedSection == 1 && len(m.conditions) > 0 {
+	case "down":
+		// Move down within current section
+		if m.focusedSection == 1 {
+			// Match Type: toggle AND/OR
+			if m.matchType == "and" {
+				m.matchType = "or"
+			}
+		} else if m.focusedSection == 2 && len(m.conditions) > 0 {
+			// Conditions: move cursor down
 			m.condCursor = (m.condCursor + 1) % len(m.conditions)
-		} else if m.focusedSection == 2 && len(m.sortSequence) > 0 {
+		} else if m.focusedSection == 3 && len(m.sortSequence) > 0 {
+			// Sort: move cursor down
 			m.sortCursor = (m.sortCursor + 1) % len(m.sortSequence)
 		}
-	case "k":
-		if m.focusedSection == 1 && len(m.conditions) > 0 {
+	case "up":
+		// Move up within current section
+		if m.focusedSection == 1 {
+			// Match Type: toggle AND/OR
+			if m.matchType == "or" {
+				m.matchType = "and"
+			}
+		} else if m.focusedSection == 2 && len(m.conditions) > 0 {
+			// Conditions: move cursor up
 			m.condCursor--
 			if m.condCursor < 0 {
 				m.condCursor = len(m.conditions) - 1
 			}
-		} else if m.focusedSection == 2 && len(m.sortSequence) > 0 {
+		} else if m.focusedSection == 3 && len(m.sortSequence) > 0 {
+			// Sort: move cursor up
 			m.sortCursor--
 			if m.sortCursor < 0 {
 				m.sortCursor = len(m.sortSequence) - 1
 			}
 		}
+
+	case "left":
+		if m.focusedSection == 1 {
+			m.matchType = "and"
+		}
+	case "right":
+		if m.focusedSection == 1 {
+			m.matchType = "or"
+		}
 	}
 
 	return m, filterEditResult{}, nil
-}
-
-func (m *filterEditModal) HandleInput(msg tea.KeyMsg) (*filterEditModal, filterEditResult, tea.Cmd) {
-	return m.Update(msg)
 }
 
 func (m *filterEditModal) SetSize(w, h int) {
@@ -174,20 +245,24 @@ func (m *filterEditModal) View() string {
 	var lines []string
 
 	// Name section
+	nameLabel := "View Name:"
 	nameStyle := lipgloss.NewStyle().Bold(true)
 	if m.focusedSection == 0 {
-		nameStyle = nameStyle.Foreground(lipgloss.Color("5"))
+		nameLabel = "► View Name:"
+		nameStyle = nameStyle.Foreground(lipgloss.Color("2")) // Green
 	}
-	lines = append(lines, nameStyle.Render("View Name:"))
-	lines = append(lines, "  "+m.name)
+	lines = append(lines, nameStyle.Render(nameLabel))
+	lines = append(lines, "  "+m.nameInput.View())
 
 	// Match type section
 	lines = append(lines, "")
 	matchLabel := "Match Type:"
-	if m.focusedSection == 0 {
+	matchStyle := lipgloss.NewStyle().Bold(true)
+	if m.focusedSection == 1 {
 		matchLabel = "► Match Type:"
+		matchStyle = matchStyle.Foreground(lipgloss.Color("2")) // Green
 	}
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Render(matchLabel))
+	lines = append(lines, matchStyle.Render(matchLabel))
 
 	andMarker := "○ AND"
 	orMarker := "○ OR"
@@ -200,11 +275,13 @@ func (m *filterEditModal) View() string {
 
 	// Conditions section
 	lines = append(lines, "")
-	condHeader := "Filter Conditions (↑↓: Navigate  a: Add  Enter: Edit  d: Delete)"
-	if m.focusedSection == 1 {
+	condHeader := "Filter Conditions (a: Add  Enter: Edit  d: Delete)"
+	condStyle := lipgloss.NewStyle().Bold(true)
+	if m.focusedSection == 2 {
 		condHeader = "► Filter Conditions (↑↓: Navigate  a: Add  Enter: Edit  d: Delete)"
+		condStyle = condStyle.Foreground(lipgloss.Color("2")) // Green
 	}
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Render(condHeader))
+	lines = append(lines, condStyle.Render(condHeader))
 
 	if len(m.conditions) == 0 {
 		lines = append(lines, "  (No conditions - matches all tracks)")
@@ -218,7 +295,7 @@ func (m *filterEditModal) View() string {
 				}
 			}
 			prefix := "  "
-			if m.focusedSection == 1 && i == m.condCursor {
+			if m.focusedSection == 2 && i == m.condCursor {
 				prefix = "▸ "
 			}
 			lines = append(lines, fmt.Sprintf("%s%s %s %s", prefix, fLabel, c.Op, c.Value))
@@ -227,11 +304,13 @@ func (m *filterEditModal) View() string {
 
 	// Sort section
 	lines = append(lines, "")
-	sortHeader := "Sort Order (↑↓: Navigate  a: Add  d: Delete  +/-: Move)"
-	if m.focusedSection == 2 {
+	sortHeader := "Sort Order (a: Add  d: Delete  +/-: Move)"
+	sortStyle := lipgloss.NewStyle().Bold(true)
+	if m.focusedSection == 3 {
 		sortHeader = "► Sort Order (↑↓: Navigate  a: Add  d: Delete  +/-: Move)"
+		sortStyle = sortStyle.Foreground(lipgloss.Color("2")) // Green
 	}
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Render(sortHeader))
+	lines = append(lines, sortStyle.Render(sortHeader))
 
 	if len(m.sortSequence) == 0 {
 		lines = append(lines, "  (No sort - default order)")
@@ -245,7 +324,7 @@ func (m *filterEditModal) View() string {
 				}
 			}
 			prefix := "  "
-			if m.focusedSection == 2 && i == m.sortCursor {
+			if m.focusedSection == 3 && i == m.sortCursor {
 				prefix = "▸ "
 			}
 			lines = append(lines, fmt.Sprintf("%s#%d %s (%s)", prefix, i+1, fLabel, s[1]))
@@ -254,7 +333,7 @@ func (m *filterEditModal) View() string {
 
 	// Help
 	lines = append(lines, "")
-	lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Ctrl+Enter: Save   ESC: Cancel   Tab/↑↓: Navigate sections"))
+	lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Ctrl+J/Enter: Save   ESC: Cancel   Tab: Next section   ↑↓: Navigate within section"))
 
 	content := strings.Join(lines, "\n")
 
@@ -267,13 +346,14 @@ func (m *filterEditModal) View() string {
 }
 
 type filterConditionModal struct {
-	fields    []filterField
-	ops       []filterOp
-	fieldIdx  int
-	opIdx     int
-	valueInput textinput.Model
-	width     int
-	height    int
+	fields          []filterField
+	ops             []filterOp
+	fieldIdx        int
+	opIdx           int
+	valueInput      textinput.Model
+	focusedSection  int // 0=field, 1=operator, 2=value
+	width           int
+	height          int
 }
 
 type filterConditionResult struct {
@@ -285,16 +365,17 @@ type filterConditionResult struct {
 func newFilterConditionModal(fieldIdx, opIdx int, value string) *filterConditionModal {
 	ti := textinput.New()
 	ti.SetValue(value)
-	ti.Focus()
+	ti.Blur() // Start blurred, focus only when on value section
 	ti.CharLimit = 100
 	ti.Width = 30
 
 	return &filterConditionModal{
-		fields:     musicFilterFields,
-		ops:        musicFilterOps,
-		fieldIdx:   fieldIdx,
-		opIdx:      opIdx,
-		valueInput: ti,
+		fields:         musicFilterFields,
+		ops:            musicFilterOps,
+		fieldIdx:       fieldIdx,
+		opIdx:          opIdx,
+		valueInput:     ti,
+		focusedSection: 0, // Focus on field first
 	}
 }
 
@@ -308,49 +389,61 @@ func (m *filterConditionModal) Update(msg tea.Msg) (*filterConditionModal, filte
 	case "esc":
 		return m, filterConditionResult{closed: true}, nil
 
-	case "enter":
-		if m.valueInput.Focused() {
-			cond := filterCondition{
-				Field: m.fields[m.fieldIdx].Value,
-				Op:    m.ops[m.opIdx].Value,
-				Value: m.valueInput.Value(),
-			}
-			return m, filterConditionResult{closed: true, submitted: true, condition: cond}, nil
+	case "ctrl+j", "enter":
+		cond := filterCondition{
+			Field: m.fields[m.fieldIdx].Value,
+			Op:    m.ops[m.opIdx].Value,
+			Value: m.valueInput.Value(),
 		}
+		return m, filterConditionResult{closed: true, submitted: true, condition: cond}, nil
 
-	case "tab", "down":
-		if m.fieldIdx < len(m.fields)-1 {
-			m.fieldIdx++
-		} else if m.opIdx < len(m.ops)-1 {
-			m.opIdx++
-		} else {
+	case "tab":
+		// Move to next section: Field -> Operator -> Value -> Field
+		m.focusedSection = (m.focusedSection + 1) % 3
+		if m.focusedSection == 2 {
 			m.valueInput.Focus()
-		}
-		return m, filterConditionResult{}, nil
-
-	case "shift+tab", "up":
-		if m.valueInput.Focused() {
+		} else {
 			m.valueInput.Blur()
-		} else if m.opIdx > 0 {
-			m.opIdx--
-		} else if m.fieldIdx > 0 {
-			m.fieldIdx--
 		}
 		return m, filterConditionResult{}, nil
 
-	case "left":
-		if m.fieldIdx < len(m.fields)-1 {
-			m.fieldIdx++
+	case "shift+tab":
+		// Move to previous section: Value -> Operator -> Field -> Value
+		m.focusedSection = (m.focusedSection - 1 + 3) % 3
+		if m.focusedSection == 2 {
+			m.valueInput.Focus()
+		} else {
+			m.valueInput.Blur()
 		}
-	case "right":
-		if m.opIdx > 0 {
+		return m, filterConditionResult{}, nil
+
+	case "up":
+		// Move up in current selection
+		if m.focusedSection == 0 && m.fieldIdx > 0 {
+			m.fieldIdx--
+		} else if m.focusedSection == 1 && m.opIdx > 0 {
 			m.opIdx--
 		}
+		return m, filterConditionResult{}, nil
+
+	case "down":
+		// Move down in current selection
+		if m.focusedSection == 0 && m.fieldIdx < len(m.fields)-1 {
+			m.fieldIdx++
+		} else if m.focusedSection == 1 && m.opIdx < len(m.ops)-1 {
+			m.opIdx++
+		}
+		return m, filterConditionResult{}, nil
 	}
 
-	var cmd tea.Cmd
-	m.valueInput, cmd = m.valueInput.Update(msg)
-	return m, filterConditionResult{}, cmd
+	// Handle text input for value
+	if m.focusedSection == 2 {
+		var cmd tea.Cmd
+		m.valueInput, cmd = m.valueInput.Update(msg)
+		return m, filterConditionResult{}, cmd
+	}
+
+	return m, filterConditionResult{}, nil
 }
 
 func (m *filterConditionModal) SetSize(w, h int) {
@@ -366,11 +459,21 @@ func (m *filterConditionModal) View() string {
 	lines = append(lines, "")
 
 	// Field selection
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Render("Field:"))
+	fieldLabel := "Field:"
+	fieldStyle := lipgloss.NewStyle().Bold(true)
+	if m.focusedSection == 0 {
+		fieldLabel = "► Field:"
+		fieldStyle = fieldStyle.Foreground(lipgloss.Color("2")) // Green
+	}
+	lines = append(lines, fieldStyle.Render(fieldLabel))
 	for i, f := range m.fields {
 		prefix := "  "
 		if i == m.fieldIdx {
-			prefix = "▸ "
+			if m.focusedSection == 0 {
+				prefix = "▸ "  // Currently focused
+			} else {
+				prefix = "✓ "  // Previously selected
+			}
 		}
 		lines = append(lines, prefix+f.Label)
 	}
@@ -378,11 +481,21 @@ func (m *filterConditionModal) View() string {
 	lines = append(lines, "")
 
 	// Operator selection
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Render("Operator:"))
+	opLabel := "Operator:"
+	opStyle := lipgloss.NewStyle().Bold(true)
+	if m.focusedSection == 1 {
+		opLabel = "► Operator:"
+		opStyle = opStyle.Foreground(lipgloss.Color("2")) // Green
+	}
+	lines = append(lines, opStyle.Render(opLabel))
 	for i, o := range m.ops {
 		prefix := "  "
 		if i == m.opIdx {
-			prefix = "▸ "
+			if m.focusedSection == 1 {
+				prefix = "▸ "  // Currently focused
+			} else {
+				prefix = "✓ "  // Previously selected
+			}
 		}
 		lines = append(lines, prefix+o.Label)
 	}
@@ -390,11 +503,17 @@ func (m *filterConditionModal) View() string {
 	lines = append(lines, "")
 
 	// Value input
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Render("Value:"))
+	valueLabel := "Value:"
+	valueStyle := lipgloss.NewStyle().Bold(true)
+	if m.focusedSection == 2 {
+		valueLabel = "► Value:"
+		valueStyle = valueStyle.Foreground(lipgloss.Color("2")) // Green
+	}
+	lines = append(lines, valueStyle.Render(valueLabel))
 	lines = append(lines, m.valueInput.View())
 
 	lines = append(lines, "")
-	lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Enter: OK   ESC: Cancel"))
+	lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Tab: Next field   ↑↓: Select   Ctrl+J/Enter: OK   ESC: Cancel"))
 
 	content := strings.Join(lines, "\n")
 
@@ -406,27 +525,43 @@ func (m *filterConditionModal) View() string {
 		Render(content)
 }
 
+type sortFieldSelectItem struct {
+	field      string
+	fieldLabel string
+	direction  string // "ASC" or "DESC"
+}
+
 type sortFieldSelectModal struct {
-	fields   []filterField
-	cursor   int
-	width    int
-	height   int
+	items  []sortFieldSelectItem
+	cursor int
+	width  int
+	height int
 }
 
 type sortFieldSelectResult struct {
 	closed    bool
 	submitted bool
 	field     string
+	direction string
 }
 
 func newSortFieldSelectModal(usedFields map[string]bool) *sortFieldSelectModal {
-	var available []filterField
+	var items []sortFieldSelectItem
 	for _, f := range musicFilterFields {
 		if !usedFields[f.Value] {
-			available = append(available, f)
+			items = append(items, sortFieldSelectItem{
+				field:      f.Value,
+				fieldLabel: f.Label,
+				direction:  "ASC",
+			})
+			items = append(items, sortFieldSelectItem{
+				field:      f.Value,
+				fieldLabel: f.Label,
+				direction:  "DESC",
+			})
 		}
 	}
-	return &sortFieldSelectModal{fields: available}
+	return &sortFieldSelectModal{items: items}
 }
 
 func (m *sortFieldSelectModal) Update(msg tea.Msg) (*sortFieldSelectModal, sortFieldSelectResult, tea.Cmd) {
@@ -443,15 +578,16 @@ func (m *sortFieldSelectModal) Update(msg tea.Msg) (*sortFieldSelectModal, sortF
 			m.cursor--
 		}
 	case "down", "j":
-		if m.cursor < len(m.fields)-1 {
+		if m.cursor < len(m.items)-1 {
 			m.cursor++
 		}
 	case "enter":
-		if m.cursor >= 0 && m.cursor < len(m.fields) {
+		if m.cursor >= 0 && m.cursor < len(m.items) {
 			return m, sortFieldSelectResult{
 				closed:    true,
 				submitted: true,
-				field:     m.fields[m.cursor].Value,
+				field:     m.items[m.cursor].field,
+				direction: m.items[m.cursor].direction,
 			}, nil
 		}
 	}
@@ -470,16 +606,16 @@ func (m *sortFieldSelectModal) View() string {
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Render("Select Sort Field"))
 	lines = append(lines, "")
 
-	for i, f := range m.fields {
+	for i, item := range m.items {
 		prefix := "  "
 		if i == m.cursor {
 			prefix = "▸ "
 		}
-		lines = append(lines, prefix+f.Label)
+		lines = append(lines, fmt.Sprintf("%s%s(%s)", prefix, item.fieldLabel, item.direction))
 	}
 
 	lines = append(lines, "")
-	lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Enter: Select   ESC: Cancel"))
+	lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("↑↓: Select   Enter: OK   ESC: Cancel"))
 
 	content := strings.Join(lines, "\n")
 
