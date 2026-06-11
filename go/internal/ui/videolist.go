@@ -96,13 +96,13 @@ func (vl *videoList) SetSize(w, h int) {
 		{Title: "M", Width: 3},
 		{Title: "Category", Width: 8},
 		{Title: "SubCat", Width: 8},
-		{Title: "Series", Width: avail * 3 / 10},
+		{Title: "Series", Width: avail * 2 / 10},
 		{Title: "S", Width: 3},
 		{Title: "E", Width: 3},
-		{Title: "Title", Width: avail * 4 / 10},
+		{Title: "Title", Width: avail * 3 / 10},
 		{Title: "Date", Width: 10},
 		{Title: "Duration", Width: 8},
-		{Title: "Filename", Width: avail - (avail*3/10) - (avail*4/10)},
+		{Title: "Filename", Width: avail - (avail*2/10) - (avail*3/10)},
 	}
 
 	for i := range cols {

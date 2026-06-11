@@ -30,6 +30,9 @@ const (
 	viewMusicRecent
 	viewMusicFilter
 	viewVideoFilter
+	viewVideoContinue
+	viewVideoRecent
+	viewVideoHealth
 )
 
 type pendingAction int
@@ -362,7 +365,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "s":
 			m.message = "Scanning..."
-			if m.activeView == viewVideoLibrary {
+			if m.activeView == viewVideoLibrary || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
 				return m, m.scanVideoCmd()
 			}
 			return m, m.scanMusicCmd()
@@ -451,10 +454,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						return m, nil
 					}
-				} else if m.activeView == viewVideoLibrary {
+				} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
 					selected := m.videoList.table.SelectedRow()
 					if len(selected) > 0 {
-						videos, _ := db.GetVideos()
+						videos := m.videoList.videos
 						
 						var paths []string
 						startIndex := -1
@@ -467,6 +470,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 						if startIndex >= 0 {
 							m.player.SetProperty("vid", "auto")
+							if m.config.Video.Fullscreen {
+								m.player.SetProperty("fullscreen", "yes")
+							}
 							m.player.PlayQueue(paths, startIndex)
 							v := videos[startIndex]
 							m.currentTrack = v.Filename
@@ -761,7 +767,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						m.artistDetail.tracksTable.SetCursor(newCursor)
 					}
-				} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter {
+		} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
 					rows := m.videoList.table.Rows()
 					cursor := m.videoList.table.Cursor()
 					if cursor < len(rows) {
@@ -818,6 +824,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshFilterTracks(m.currentFilterID)
 		} else if m.activeView == viewVideoLibrary {
 			m.refreshVideoList()
+		} else if m.activeView == viewVideoContinue {
+			m.refreshVideoContinue()
+		} else if m.activeView == viewVideoRecent {
+			m.refreshVideoRecent()
+		} else if m.activeView == viewVideoHealth {
+			m.refreshVideoHealth()
 		}
 		// Update cover for current selection
 		if n := m.sidebar.SelectedNode(); n != nil {
@@ -828,6 +840,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		if m.player != nil {
 			if !m.player.IsRunning() {
+				if m.playbackPos > 0 && m.player.GetCurrentTrackPath() != "" {
+					db.UpdateVideoLastPos(m.player.GetCurrentTrackPath(), m.playbackPos)
+				}
 				m.trackList.UpdatePlaybackStatus("", false)
 				m.artistDetail.UpdatePlaybackStatus("", false)
 				m.videoList.UpdatePlaybackStatus("", false)
@@ -835,6 +850,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.duration = 0
 				m.currentTrack = ""
 			} else {
+				completedPath := m.player.ConsumeCompletedPath()
+				if completedPath != "" {
+					db.ClearVideoLastPos(completedPath)
+				}
 				val, _ := m.player.GetProperty("time-pos")
 				if pos, ok := val.(float64); ok {
 					m.playbackPos = pos
@@ -857,6 +876,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.trackList.UpdatePlaybackStatus(currentPath, isPaused)
 				m.artistDetail.UpdatePlaybackStatus(currentPath, isPaused)
 				m.videoList.UpdatePlaybackStatus(currentPath, isPaused)
+
+				if currentPath != "" && m.playbackPos > 0 {
+					db.UpdateVideoLastPos(currentPath, m.playbackPos)
+				}
 			}
 			if cmd := m.setCoverFromPlaying(); cmd != nil {
 				cmds = append(cmds, cmd)
@@ -891,7 +914,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.artistDetail, cmd = m.artistDetail.Update(msg)
 			cmds = append(cmds, cmd)
-		} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter {
+	} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
 			var cmd tea.Cmd
 			m.videoList, cmd = m.videoList.Update(msg)
 			cmds = append(cmds, cmd)
@@ -908,7 +931,7 @@ func (m *model) syncFocus() {
 		m.musicArtists.SetFocus(!m.focusedSide)
 	} else if m.activeView == viewMusicArtistDetail {
 		m.artistDetail.SetFocus(!m.focusedSide)
-	} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter {
+	} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
 		m.videoList.SetFocus(!m.focusedSide)
 	}
 }
@@ -1002,6 +1025,15 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 	case n.id == "video_library":
 		m.activeView = viewVideoLibrary
 		m.refreshVideoList()
+	case n.id == "video_continue":
+		m.activeView = viewVideoContinue
+		m.refreshVideoContinue()
+	case n.id == "video_recent":
+		m.activeView = viewVideoRecent
+		m.refreshVideoRecent()
+	case n.id == "video_health":
+		m.activeView = viewVideoHealth
+		m.refreshVideoHealth()
 	case strings.HasPrefix(n.id, "artist:"):
 		artist := strings.TrimPrefix(n.id, "artist:")
 		m.activeView = viewMusicArtistDetail
@@ -1042,10 +1074,10 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 		m.activeView = viewVideoLibrary
 		m.refreshVideoPlaylistFiles(id)
 	}
+	m.syncFocus()
 	if cmd := m.updateCoverForNode(n); cmd != nil {
 		return cmd
 	}
-	m.syncFocus()
 	return nil
 }
 
@@ -1387,6 +1419,27 @@ func (m *model) refreshVideoList() {
 	m.syncFocus()
 }
 
+func (m *model) refreshVideoContinue() {
+	sbWidth := m.getSidebarWidth()
+	videos, _ := db.GetContinueWatchingVideos()
+	m.videoList = newVideoListFromVideos(m.width-sbWidth-1, m.height-6, videos)
+	m.syncFocus()
+}
+
+func (m *model) refreshVideoRecent() {
+	sbWidth := m.getSidebarWidth()
+	videos, _ := db.GetRecentlyAddedVideos()
+	m.videoList = newVideoListFromVideos(m.width-sbWidth-1, m.height-6, videos)
+	m.syncFocus()
+}
+
+func (m *model) refreshVideoHealth() {
+	sbWidth := m.getSidebarWidth()
+	videos, _ := db.GetUnhealthyVideos()
+	m.videoList = newVideoListFromVideos(m.width-sbWidth-1, m.height-6, videos)
+	m.syncFocus()
+}
+
 func (m *model) coverDisplayCmd() tea.Cmd {
 	path := m.sidebar.CoverPath()
 	if path == "" || !m.sidebar.HasCover() {
@@ -1534,6 +1587,12 @@ func (m model) View() string {
 	case viewVideoLibrary:
 		mainContentStr = m.videoList.View()
 	case viewVideoFilter:
+		mainContentStr = m.videoList.View()
+	case viewVideoContinue:
+		mainContentStr = m.videoList.View()
+	case viewVideoRecent:
+		mainContentStr = m.videoList.View()
+	case viewVideoHealth:
 		mainContentStr = m.videoList.View()
 	default:
 		mainContentStr = "Unknown View"

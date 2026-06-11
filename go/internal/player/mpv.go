@@ -13,14 +13,15 @@ import (
 )
 
 type MpvPlayer struct {
-	cmd        *exec.Cmd
-	socketPath string
-	args       []string
-	conn       net.Conn
-	queue      []string
-	currentIdx int
-	pending    map[uint32]chan interface{}
-	mu         sync.Mutex
+	cmd           *exec.Cmd
+	socketPath    string
+	args          []string
+	conn          net.Conn
+	queue         []string
+	currentIdx    int
+	pending       map[uint32]chan interface{}
+	mu            sync.Mutex
+	completedPath string
 }
 
 func NewMpvPlayer(socketPath string, args []string) *MpvPlayer {
@@ -135,9 +136,14 @@ func (p *MpvPlayer) handleEvent(event map[string]interface{}) {
 		switch reason {
 		case "eof":
 			p.mu.Lock()
+			completed := ""
+			if p.currentIdx >= 0 && p.currentIdx < len(p.queue) {
+				completed = p.queue[p.currentIdx]
+			}
 			if p.currentIdx >= 0 && p.currentIdx+1 < len(p.queue) {
 				p.currentIdx++
 			}
+			p.completedPath = completed
 			p.mu.Unlock()
 		case "quit", "error":
 			p.mu.Lock()
@@ -174,6 +180,14 @@ func (p *MpvPlayer) GetCurrentTrackPath() string {
 		return p.queue[p.currentIdx]
 	}
 	return ""
+}
+
+func (p *MpvPlayer) ConsumeCompletedPath() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	path := p.completedPath
+	p.completedPath = ""
+	return path
 }
 
 func (p *MpvPlayer) IsRunning() bool {

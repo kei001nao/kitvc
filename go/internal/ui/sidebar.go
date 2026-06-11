@@ -20,6 +20,9 @@ const (
 	nodeRecentlyAdded
 	nodeMusicFilter
 	nodeVideoFilter
+	nodeVideoContinue
+	nodeVideoRecent
+	nodeVideoHealth
 )
 
 type node struct {
@@ -115,6 +118,9 @@ func newSidebar(width, height int) sidebar {
 
 	// 6. Video Library Node with Views
 	videoLibraryNode := &node{label: "Video Library", id: "video_library", typ: nodeCategory, expanded: true, level: 0}
+	videoLibraryNode.children = append(videoLibraryNode.children, &node{label: "Continue Watching", id: "video_continue", typ: nodeVideoContinue, level: 1})
+	videoLibraryNode.children = append(videoLibraryNode.children, &node{label: "Recently Added", id: "video_recent", typ: nodeVideoRecent, level: 1})
+	videoLibraryNode.children = append(videoLibraryNode.children, &node{label: "Health Check", id: "video_health", typ: nodeVideoHealth, level: 1})
 	videoViewsNode := &node{label: "Views", id: "video_views", typ: nodeCategory, expanded: false, level: 1}
 	videoFilters, err := db.GetVideoFilters()
 	if err == nil {
@@ -212,6 +218,9 @@ func (s *sidebar) Refresh() {
 
 	// 6. Video Library Node with Views
 	videoLibraryNode := &node{label: "Video Library", id: "video_library", typ: nodeCategory, expanded: true, level: 0}
+	videoLibraryNode.children = append(videoLibraryNode.children, &node{label: "Continue Watching", id: "video_continue", typ: nodeVideoContinue, level: 1})
+	videoLibraryNode.children = append(videoLibraryNode.children, &node{label: "Recently Added", id: "video_recent", typ: nodeVideoRecent, level: 1})
+	videoLibraryNode.children = append(videoLibraryNode.children, &node{label: "Health Check", id: "video_health", typ: nodeVideoHealth, level: 1})
 	videoViewsNode := &node{label: "Views", id: "video_views", typ: nodeCategory, expanded: false, level: 1}
 	videoFilters, err := db.GetVideoFilters()
 	if err == nil {

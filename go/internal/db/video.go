@@ -306,3 +306,116 @@ func GetFilteredVideos(conditionsJSON, sortJSON string) ([]VideoData, error) {
 	}
 	return videos, nil
 }
+
+func UpdateVideoLastPos(path string, lastPos float64) error {
+	_, err := db.Exec(`
+		UPDATE video_files 
+		SET last_pos = ?, last_played_at = strftime('%s','now')
+		WHERE path = ?
+	`, lastPos, path)
+	return err
+}
+
+func ClearVideoLastPos(path string) error {
+	_, err := db.Exec(`
+		UPDATE video_files 
+		SET last_pos = 0
+		WHERE path = ?
+	`, path)
+	return err
+}
+
+func GetContinueWatchingVideos() ([]VideoData, error) {
+	rows, err := db.Query(`
+		SELECT 
+			path, filename, size, duration, year, mtime,
+			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
+			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
+			COALESCE(title, ''), COALESCE(air_date, '')
+		FROM video_files
+		WHERE last_pos > 0
+		ORDER BY last_played_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var videos []VideoData
+	for rows.Next() {
+		var v VideoData
+		err := rows.Scan(
+			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
+			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
+			&v.Title, &v.AirDate,
+		)
+		if err != nil {
+			return nil, err
+		}
+		videos = append(videos, v)
+	}
+	return videos, nil
+}
+
+func GetRecentlyAddedVideos() ([]VideoData, error) {
+	rows, err := db.Query(`
+		SELECT 
+			path, filename, size, duration, year, mtime,
+			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
+			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
+			COALESCE(title, ''), COALESCE(air_date, '')
+		FROM video_files
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var videos []VideoData
+	for rows.Next() {
+		var v VideoData
+		err := rows.Scan(
+			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
+			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
+			&v.Title, &v.AirDate,
+		)
+		if err != nil {
+			return nil, err
+		}
+		videos = append(videos, v)
+	}
+	return videos, nil
+}
+
+func GetUnhealthyVideos() ([]VideoData, error) {
+	rows, err := db.Query(`
+		SELECT 
+			path, filename, size, duration, year, mtime,
+			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
+			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
+			COALESCE(title, ''), COALESCE(air_date, '')
+		FROM video_files
+		WHERE synopsis IS NULL OR year IS NULL
+		ORDER BY category, series, season, episode, title
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var videos []VideoData
+	for rows.Next() {
+		var v VideoData
+		err := rows.Scan(
+			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
+			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
+			&v.Title, &v.AirDate,
+		)
+		if err != nil {
+			return nil, err
+		}
+		videos = append(videos, v)
+	}
+	return videos, nil
+}
