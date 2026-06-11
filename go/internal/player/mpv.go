@@ -132,11 +132,17 @@ func (p *MpvPlayer) handleEvent(event map[string]interface{}) {
 		}
 	case "end-file":
 		reason, _ := event["reason"].(string)
-		if reason == "eof" {
+		switch reason {
+		case "eof":
 			p.mu.Lock()
 			if p.currentIdx >= 0 && p.currentIdx+1 < len(p.queue) {
 				p.currentIdx++
 			}
+			p.mu.Unlock()
+		case "quit", "stop", "error":
+			p.mu.Lock()
+			p.currentIdx = -1
+			p.queue = nil
 			p.mu.Unlock()
 		}
 	}
