@@ -139,7 +139,7 @@ func (p *MpvPlayer) handleEvent(event map[string]interface{}) {
 				p.currentIdx++
 			}
 			p.mu.Unlock()
-		case "quit", "stop", "error":
+		case "quit", "error":
 			p.mu.Lock()
 			p.currentIdx = -1
 			p.queue = nil
