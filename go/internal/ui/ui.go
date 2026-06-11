@@ -848,6 +848,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			currentPath := m.player.GetCurrentTrackPath()
 			m.trackList.UpdatePlaybackStatus(currentPath, isPaused)
 			m.artistDetail.UpdatePlaybackStatus(currentPath, isPaused)
+			m.videoList.UpdatePlaybackStatus(currentPath, isPaused)
 			if cmd := m.setCoverFromPlaying(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
