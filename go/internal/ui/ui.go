@@ -860,7 +860,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.artistDetail, cmd = m.artistDetail.Update(msg)
 			cmds = append(cmds, cmd)
-		} else if m.activeView == viewVideoLibrary {
+		} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter {
 			var cmd tea.Cmd
 			m.videoList, cmd = m.videoList.Update(msg)
 			cmds = append(cmds, cmd)
@@ -877,7 +877,7 @@ func (m *model) syncFocus() {
 		m.musicArtists.SetFocus(!m.focusedSide)
 	} else if m.activeView == viewMusicArtistDetail {
 		m.artistDetail.SetFocus(!m.focusedSide)
-	} else if m.activeView == viewVideoLibrary {
+	} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter {
 		m.videoList.SetFocus(!m.focusedSide)
 	}
 }
