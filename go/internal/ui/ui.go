@@ -827,28 +827,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tickMsg:
 		if m.player != nil {
-			val, _ := m.player.GetProperty("time-pos")
-			if pos, ok := val.(float64); ok {
-				m.playbackPos = pos
-			}
-			val, _ = m.player.GetProperty("duration")
-			if dur, ok := val.(float64); ok {
-				m.duration = dur
-			}
-			val, _ = m.player.GetProperty("volume")
-			if v, ok := val.(float64); ok {
-				m.volume = v
-			}
+			if !m.player.IsRunning() {
+				m.trackList.UpdatePlaybackStatus("", false)
+				m.artistDetail.UpdatePlaybackStatus("", false)
+				m.videoList.UpdatePlaybackStatus("", false)
+				m.playbackPos = 0
+				m.duration = 0
+				m.currentTrack = ""
+			} else {
+				val, _ := m.player.GetProperty("time-pos")
+				if pos, ok := val.(float64); ok {
+					m.playbackPos = pos
+				}
+				val, _ = m.player.GetProperty("duration")
+				if dur, ok := val.(float64); ok {
+					m.duration = dur
+				}
+				val, _ = m.player.GetProperty("volume")
+				if v, ok := val.(float64); ok {
+					m.volume = v
+				}
 
-			valPause, _ := m.player.GetProperty("pause")
-			isPaused := false
-			if p, ok := valPause.(bool); ok {
-				isPaused = p
+				valPause, _ := m.player.GetProperty("pause")
+				isPaused := false
+				if p, ok := valPause.(bool); ok {
+					isPaused = p
+				}
+				currentPath := m.player.GetCurrentTrackPath()
+				m.trackList.UpdatePlaybackStatus(currentPath, isPaused)
+				m.artistDetail.UpdatePlaybackStatus(currentPath, isPaused)
+				m.videoList.UpdatePlaybackStatus(currentPath, isPaused)
 			}
-			currentPath := m.player.GetCurrentTrackPath()
-			m.trackList.UpdatePlaybackStatus(currentPath, isPaused)
-			m.artistDetail.UpdatePlaybackStatus(currentPath, isPaused)
-			m.videoList.UpdatePlaybackStatus(currentPath, isPaused)
 			if cmd := m.setCoverFromPlaying(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
