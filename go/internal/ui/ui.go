@@ -29,6 +29,7 @@ const (
 	viewMusicArtistDetail
 	viewMusicRecent
 	viewMusicFilter
+	viewVideoFilter
 )
 
 type pendingAction int
@@ -44,6 +45,9 @@ const (
 	actionCreateMusicFilter
 	actionEditMusicFilter
 	actionDeleteMusicFilter
+	actionCreateVideoFilter
+	actionEditVideoFilter
+	actionDeleteVideoFilter
 )
 
 type model struct {
@@ -74,6 +78,8 @@ type model struct {
 	playingAlbumID    int64
 	currentFilterID   int64
 	currentFilterName string
+	currentVideoFilterID   int64
+	currentVideoFilterName string
 	filterEdit        *filterEditModal
 	filterCondEdit    *filterConditionModal
 	sortFieldSelect   *sortFieldSelectModal
@@ -141,7 +147,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.filterEdit.focusedSection == 2 {
 					// Add condition - set condCursor to -1 so it appends
 					m.filterEdit.condCursor = -1
-					m.filterCondEdit = newFilterConditionModal(0, 0, "")
+					m.filterCondEdit = newFilterConditionModal(0, 0, "", m.filterEdit.filterFields, m.filterEdit.filterOps)
 					m.filterCondEdit.SetSize(m.width, m.height)
 					return m, nil
 				} else if m.filterEdit.focusedSection == 3 {
@@ -150,7 +156,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					for _, s := range m.filterEdit.sortSequence {
 						usedFields[s[0]] = true
 					}
-					m.sortFieldSelect = newSortFieldSelectModal(usedFields)
+					m.sortFieldSelect = newSortFieldSelectModal(usedFields, m.filterEdit.filterFields)
 					m.sortFieldSelect.SetSize(m.width, m.height)
 					return m, nil
 				}
@@ -159,20 +165,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Edit condition
 					c := m.filterEdit.conditions[m.filterEdit.condCursor]
 					fieldIdx := 0
-					for i, f := range musicFilterFields {
+					for i, f := range m.filterEdit.filterFields {
 						if f.Value == c.Field {
 							fieldIdx = i
 							break
 						}
 					}
 					opIdx := 0
-					for i, o := range musicFilterOps {
+					for i, o := range m.filterEdit.filterOps {
 						if o.Value == c.Op {
 							opIdx = i
 							break
 						}
 					}
-					m.filterCondEdit = newFilterConditionModal(fieldIdx, opIdx, c.Value)
+					m.filterCondEdit = newFilterConditionModal(fieldIdx, opIdx, c.Value, m.filterEdit.filterFields, m.filterEdit.filterOps)
 					m.filterCondEdit.SetSize(m.width, m.height)
 					return m, nil
 				}
@@ -245,6 +251,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.sidebar.ExpandByID("music_views")
 					m.sidebar.SelectByID(fmt.Sprintf("music_filter:%d", m.currentFilterID))
 					m.refreshFilterTracks(m.currentFilterID)
+				} else if m.pendingAction == actionCreateVideoFilter {
+					newID, err := db.CreateVideoFilter(result.name, result.condJSON, result.sortJSON)
+					if err == nil {
+						m.message = fmt.Sprintf("Created view '%s'", result.name)
+						m.currentVideoFilterID = newID
+						m.currentVideoFilterName = result.name
+						m.sidebar.Refresh()
+						m.sidebar.ExpandByID("video_views")
+						m.sidebar.SelectByID(fmt.Sprintf("video_filter:%d", newID))
+						m.activeView = viewVideoFilter
+						m.refreshVideoFilterTracks(newID)
+					}
+				} else if m.pendingAction == actionEditVideoFilter {
+					db.UpdateVideoFilter(m.currentVideoFilterID, result.name, result.condJSON, result.sortJSON)
+					m.message = fmt.Sprintf("Updated view '%s'", result.name)
+					m.currentVideoFilterName = result.name
+					m.sidebar.Refresh()
+					m.sidebar.ExpandByID("video_views")
+					m.sidebar.SelectByID(fmt.Sprintf("video_filter:%d", m.currentVideoFilterID))
+					m.refreshVideoFilterTracks(m.currentVideoFilterID)
 				}
 			}
 			m.filterEdit = nil
@@ -490,6 +516,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", m.currentFilterName))
 				m.modal.SetSize(m.width, m.height)
 				return m, nil
+		} else if !m.focusedSide && m.activeView == viewVideoFilter && m.currentVideoFilterID > 0 {
+				m.pendingAction = actionDeleteVideoFilter
+				m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", m.currentVideoFilterName))
+				m.modal.SetSize(m.width, m.height)
+				return m, nil
 		} else if m.focusedSide {
 			sel := m.sidebar.SelectedNode()
 			if sel != nil && strings.HasPrefix(sel.id, "music_playlist:") {
@@ -502,6 +533,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentFilterID = id
 				m.currentFilterName = sel.label
 				m.pendingAction = actionDeleteMusicFilter
+				m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", sel.label))
+				m.modal.SetSize(m.width, m.height)
+			} else if sel != nil && strings.HasPrefix(sel.id, "video_filter:") {
+				idStr := strings.TrimPrefix(sel.id, "video_filter:")
+				id, _ := strconv.ParseInt(idStr, 10, 64)
+				m.currentVideoFilterID = id
+				m.currentVideoFilterName = sel.label
+				m.pendingAction = actionDeleteVideoFilter
 				m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", sel.label))
 				m.modal.SetSize(m.width, m.height)
 			}
@@ -629,7 +668,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				sel := m.sidebar.SelectedNode()
 				if sel != nil && sel.id == "music_views" {
 					m.pendingAction = actionCreateMusicFilter
-					m.filterEdit = newFilterEditModal("", "[]", "[]")
+					m.filterEdit = newFilterEditModal("", "[]", "[]", musicFilterFields, musicFilterOps)
+					m.filterEdit.SetSize(m.width, m.height)
+				} else if sel != nil && sel.id == "video_views" {
+					m.pendingAction = actionCreateVideoFilter
+					m.filterEdit = newFilterEditModal("", "[]", "[]", videoFilterFields, videoFilterOps)
 					m.filterEdit.SetSize(m.width, m.height)
 				}
 			}
@@ -644,7 +687,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err == nil {
 						m.currentFilterID = id
 						m.pendingAction = actionEditMusicFilter
-						m.filterEdit = newFilterEditModal(filter.Name, filter.ConditionsJSON, filter.SortJSON)
+						m.filterEdit = newFilterEditModal(filter.Name, filter.ConditionsJSON, filter.SortJSON, musicFilterFields, musicFilterOps)
+						m.filterEdit.SetSize(m.width, m.height)
+					}
+				} else if sel != nil && strings.HasPrefix(sel.id, "video_filter:") {
+					idStr := strings.TrimPrefix(sel.id, "video_filter:")
+					id, _ := strconv.ParseInt(idStr, 10, 64)
+					filter, err := db.GetVideoFilterByID(id)
+					if err == nil {
+						m.currentVideoFilterID = id
+						m.pendingAction = actionEditVideoFilter
+						m.filterEdit = newFilterEditModal(filter.Name, filter.ConditionsJSON, filter.SortJSON, videoFilterFields, videoFilterOps)
 						m.filterEdit.SetSize(m.width, m.height)
 					}
 				}
@@ -652,7 +705,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				filter, err := db.GetMusicFilterByID(m.currentFilterID)
 				if err == nil {
 					m.pendingAction = actionEditMusicFilter
-					m.filterEdit = newFilterEditModal(filter.Name, filter.ConditionsJSON, filter.SortJSON)
+					m.filterEdit = newFilterEditModal(filter.Name, filter.ConditionsJSON, filter.SortJSON, musicFilterFields, musicFilterOps)
+					m.filterEdit.SetSize(m.width, m.height)
+				}
+			} else if !m.focusedSide && m.activeView == viewVideoFilter && m.currentVideoFilterID > 0 {
+				filter, err := db.GetVideoFilterByID(m.currentVideoFilterID)
+				if err == nil {
+					m.pendingAction = actionEditVideoFilter
+					m.filterEdit = newFilterEditModal(filter.Name, filter.ConditionsJSON, filter.SortJSON, videoFilterFields, videoFilterOps)
 					m.filterEdit.SetSize(m.width, m.height)
 				}
 			}
@@ -894,6 +954,8 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 	m.currentPlaylistID = 0
 	m.currentFilterID = 0
 	m.currentFilterName = ""
+	m.currentVideoFilterID = 0
+	m.currentVideoFilterName = ""
 
 	switch {
 	case n.id == "music_library":
@@ -935,6 +997,13 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 		m.activeView = viewMusicLibrary
 		m.trackList.ClearMarks()
 		m.refreshPlaylistTracks(id)
+	case strings.HasPrefix(n.id, "video_filter:"):
+		idStr := strings.TrimPrefix(n.id, "video_filter:")
+		id, _ := strconv.ParseInt(idStr, 10, 64)
+		m.currentVideoFilterID = id
+		m.currentVideoFilterName = n.label
+		m.activeView = viewVideoFilter
+		m.refreshVideoFilterTracks(id)
 	case strings.HasPrefix(n.id, "video_playlist:"):
 		idStr := strings.TrimPrefix(n.id, "video_playlist:")
 		id, _ := strconv.ParseInt(idStr, 10, 64)
@@ -1059,6 +1128,19 @@ func (m *model) refreshFilterTracks(filterID int64) {
 	}
 	tracks, _ := db.GetFilteredMusicTracks(filter.ConditionsJSON, filter.SortJSON)
 	m.trackList = newTrackListFromTracks(m.width-sbWidth-1, m.height-6, tracks)
+	m.syncFocus()
+}
+
+func (m *model) refreshVideoFilterTracks(filterID int64) {
+	sbWidth := m.getSidebarWidth()
+	filter, err := db.GetVideoFilterByID(filterID)
+	if err != nil {
+		m.videoList = newVideoListFromVideos(m.width-sbWidth-1, m.height-6, nil)
+		m.syncFocus()
+		return
+	}
+	videos, _ := db.GetFilteredVideos(filter.ConditionsJSON, filter.SortJSON)
+	m.videoList = newVideoListFromVideos(m.width-sbWidth-1, m.height-6, videos)
 	m.syncFocus()
 }
 
@@ -1251,6 +1333,18 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		m.activeView = viewMusicArtists
 		m.sidebar.Refresh()
 		m.modal = nil
+
+	case actionCreateVideoFilter:
+		m.modal = nil
+
+	case actionDeleteVideoFilter:
+		db.DeleteVideoFilter(m.currentVideoFilterID)
+		m.message = fmt.Sprintf("Deleted view '%s'", m.currentVideoFilterName)
+		m.currentVideoFilterID = 0
+		m.currentVideoFilterName = ""
+		m.activeView = viewVideoLibrary
+		m.sidebar.Refresh()
+		m.modal = nil
 	}
 
 	return m
@@ -1407,6 +1501,8 @@ func (m model) View() string {
 	case viewMusicArtistDetail:
 		mainContentStr = m.artistDetail.View()
 	case viewVideoLibrary:
+		mainContentStr = m.videoList.View()
+	case viewVideoFilter:
 		mainContentStr = m.videoList.View()
 	default:
 		mainContentStr = "Unknown View"

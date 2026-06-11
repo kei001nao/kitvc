@@ -150,23 +150,35 @@ func buildGroupClause(op string, rules []interface{}) (string, []interface{}) {
 }
 
 func buildLeafClause(field, operator string, value interface{}) (string, interface{}) {
+	// Use COALESCE to handle NULL values properly
+	coalesceField := "COALESCE(" + field + ", '')"
+	
 	switch operator {
 	case "==":
-		return field + " = ?", value
+		// For empty string, match both NULL and empty string
+		if value == "" || value == nil {
+			return "(" + field + " IS NULL OR " + coalesceField + " = ?)", ""
+		}
+		return coalesceField + " = ?", value
 	case "!=":
-		return "(" + field + " != ? OR " + field + " IS NULL)", value
+		// For empty string, exclude both NULL and empty string
+		if value == "" || value == nil {
+			return "(" + field + " IS NOT NULL AND " + coalesceField + " != ?)", ""
+		}
+		return "(" + coalesceField + " != ? OR " + field + " IS NULL)", value
 	case "contains":
-		return field + " LIKE ?", "%" + fmt.Sprintf("%v", value) + "%"
+		return coalesceField + " LIKE ?", "%" + fmt.Sprintf("%v", value) + "%"
 	case "not_contains":
-		return field + " NOT LIKE ?", "%" + fmt.Sprintf("%v", value) + "%"
+		return coalesceField + " NOT LIKE ?", "%" + fmt.Sprintf("%v", value) + "%"
 	case ">":
-		return field + " > ?", value
+		// For numeric comparison, need to handle non-numeric values
+		return "(" + field + " IS NOT NULL AND " + field + " > ?)", value
 	case "<":
-		return field + " < ?", value
+		return "(" + field + " IS NOT NULL AND " + field + " < ?)", value
 	case ">=":
-		return field + " >= ?", value
+		return "(" + field + " IS NOT NULL AND " + field + " >= ?)", value
 	case "<=":
-		return field + " <= ?", value
+		return "(" + field + " IS NOT NULL AND " + field + " <= ?)", value
 	case "is_null":
 		return field + " IS NULL", nil
 	case "is_not_null":

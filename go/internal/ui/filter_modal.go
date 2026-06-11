@@ -32,6 +32,19 @@ var musicFilterOps = []filterOp{
 	{">=", ">="}, {"<=", "<="}, {"Is Null", "is_null"}, {"Is Not Null", "is_not_null"},
 }
 
+var videoFilterFields = []filterField{
+	{"Type", "type"}, {"Category", "category"}, {"SubCategory", "subcategory"},
+	{"Series", "series"}, {"Season", "season"}, {"Episode", "episode"},
+	{"Title", "title"}, {"Year", "year"}, {"Genres", "genres"},
+	{"Duration", "duration"}, {"CreatedAt", "created_at"},
+}
+
+var videoFilterOps = []filterOp{
+	{"==", "=="}, {"!=", "!="}, {"Contains", "contains"},
+	{"Not Contains", "not_contains"}, {">", ">"}, {"<", "<"},
+	{"Is Null", "is_null"}, {"Is Not Null", "is_not_null"},
+}
+
 type filterCondition struct {
 	Field string `json:"field"`
 	Op    string `json:"op"`
@@ -43,11 +56,13 @@ type filterEditModal struct {
 	conditions     []filterCondition
 	sortSequence   [][2]string
 	matchType      string
-	focusedSection int // 0=name, 1=conditions, 2=sort
+	focusedSection int // 0=name, 1=matchType, 2=conditions, 3=sort
 	condCursor     int
 	sortCursor     int
 	width          int
 	height         int
+	filterFields   []filterField
+	filterOps      []filterOp
 }
 
 type filterEditResult struct {
@@ -58,7 +73,7 @@ type filterEditResult struct {
 	sortJSON  string
 }
 
-func newFilterEditModal(name string, conditionsJSON, sortJSON string) *filterEditModal {
+func newFilterEditModal(name string, conditionsJSON, sortJSON string, filterFields []filterField, filterOps []filterOp) *filterEditModal {
 	var conditions []filterCondition
 
 	// Parse the conditions JSON which has format: {"op":"and","rules":[...]}
@@ -100,6 +115,8 @@ func newFilterEditModal(name string, conditionsJSON, sortJSON string) *filterEdi
 		conditions:   conditions,
 		sortSequence: sortSeq,
 		matchType:    matchType,
+		filterFields: filterFields,
+		filterOps:    filterOps,
 	}
 }
 
@@ -362,7 +379,7 @@ type filterConditionResult struct {
 	condition filterCondition
 }
 
-func newFilterConditionModal(fieldIdx, opIdx int, value string) *filterConditionModal {
+func newFilterConditionModal(fieldIdx, opIdx int, value string, filterFields []filterField, filterOps []filterOp) *filterConditionModal {
 	ti := textinput.New()
 	ti.SetValue(value)
 	ti.Blur() // Start blurred, focus only when on value section
@@ -370,8 +387,8 @@ func newFilterConditionModal(fieldIdx, opIdx int, value string) *filterCondition
 	ti.Width = 30
 
 	return &filterConditionModal{
-		fields:         musicFilterFields,
-		ops:            musicFilterOps,
+		fields:         filterFields,
+		ops:            filterOps,
 		fieldIdx:       fieldIdx,
 		opIdx:          opIdx,
 		valueInput:     ti,
@@ -545,9 +562,9 @@ type sortFieldSelectResult struct {
 	direction string
 }
 
-func newSortFieldSelectModal(usedFields map[string]bool) *sortFieldSelectModal {
+func newSortFieldSelectModal(usedFields map[string]bool, filterFields []filterField) *sortFieldSelectModal {
 	var items []sortFieldSelectItem
-	for _, f := range musicFilterFields {
+	for _, f := range filterFields {
 		if !usedFields[f.Value] {
 			items = append(items, sortFieldSelectItem{
 				field:      f.Value,
