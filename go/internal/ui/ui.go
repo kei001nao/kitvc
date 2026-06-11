@@ -35,6 +35,34 @@ const (
 	viewVideoHealth
 )
 
+var viewStateNames = map[viewState]string{
+	viewMusicLibrary:      "music_library",
+	viewVideoLibrary:      "video_library",
+	viewMusicQueue:        "music_queue",
+	viewMusicArtists:      "music_artists",
+	viewMusicArtistDetail: "music_artist_detail",
+	viewMusicRecent:       "music_recent",
+	viewMusicFilter:       "music_filter",
+	viewVideoFilter:       "video_filter",
+	viewVideoContinue:     "video_continue",
+	viewVideoRecent:       "video_recent",
+	viewVideoHealth:       "video_health",
+}
+
+var viewStateFromName = map[string]viewState{
+	"music_library":      viewMusicLibrary,
+	"video_library":      viewVideoLibrary,
+	"music_queue":        viewMusicQueue,
+	"music_artists":      viewMusicArtists,
+	"music_artist_detail": viewMusicArtistDetail,
+	"music_recent":       viewMusicRecent,
+	"music_filter":       viewMusicFilter,
+	"video_filter":       viewVideoFilter,
+	"video_continue":     viewVideoContinue,
+	"video_recent":       viewVideoRecent,
+	"video_health":       viewVideoHealth,
+}
+
 type pendingAction int
 
 const (
@@ -108,10 +136,30 @@ func InitialModel(cfg *config.Config) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tick()
+	return tea.Batch(tick(), loadUIStateCmd())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle UI state loaded message
+	if msg, ok := msg.(uiStateLoadedMsg); ok {
+		m.sidebar.CollapseAll()
+		for _, id := range msg.state.ExpandedNodes {
+			m.sidebar.ExpandByID(id)
+		}
+		if msg.state.SelectedNode != "" {
+			m.sidebar.SelectByID(msg.state.SelectedNode)
+			if n := m.sidebar.SelectedNode(); n != nil {
+				m.handleSidebarChange(n)
+			}
+		}
+		m.focusedSide = msg.state.FocusedSide
+		if v, ok := viewStateFromName[msg.state.ActiveView]; ok {
+			m.activeView = v
+		}
+		m.syncFocus()
+		return m, nil
+	}
+
 	// Handle filter edit modal
 	if m.filterEdit != nil {
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
@@ -316,6 +364,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.player != nil {
 				m.player.Stop()
 			}
+			m.saveUIState()
 			return m, tea.Quit
 		case "tab":
 			m.focusedSide = !m.focusedSide
@@ -1413,6 +1462,39 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 	return m
 }
 
+func (m *model) saveUIState() {
+	state := config.UIState{
+		ExpandedNodes: m.sidebar.GetExpandedNodeIDs(),
+		FocusedSide:   m.focusedSide,
+		ActiveView:    viewStateNames[m.activeView],
+	}
+	if n := m.sidebar.SelectedNode(); n != nil {
+		state.SelectedNode = n.id
+	}
+	config.SaveUIState(state)
+}
+
+func (m *model) loadUIState() {
+	state, err := config.LoadUIState()
+	if err != nil {
+		return
+	}
+	for _, id := range state.ExpandedNodes {
+		m.sidebar.ExpandByID(id)
+	}
+	if state.SelectedNode != "" {
+		m.sidebar.SelectByID(state.SelectedNode)
+		if n := m.sidebar.SelectedNode(); n != nil {
+			m.handleSidebarChange(n)
+		}
+	}
+	m.focusedSide = state.FocusedSide
+	if v, ok := viewStateFromName[state.ActiveView]; ok {
+		m.activeView = v
+	}
+	m.syncFocus()
+}
+
 func (m *model) refreshVideoList() {
 	sbWidth := m.getSidebarWidth()
 	m.videoList = newVideoList(m.width-sbWidth-1, m.height-6)
@@ -1486,6 +1568,20 @@ func tick() tea.Cmd {
 	return tea.Every(250*time.Millisecond, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
+}
+
+type uiStateLoadedMsg struct {
+	state config.UIState
+}
+
+func loadUIStateCmd() tea.Cmd {
+	return func() tea.Msg {
+		state, err := config.LoadUIState()
+		if err != nil {
+			return nil
+		}
+		return uiStateLoadedMsg{state: state}
+	}
 }
 
 type scanFinishedMsg struct {

@@ -245,6 +245,18 @@ func (s *sidebar) Refresh() {
 	s.rebuildVisible()
 }
 
+func (s *sidebar) CollapseAll() {
+	var collapse func(nodes []*node)
+	collapse = func(nodes []*node) {
+		for _, n := range nodes {
+			n.expanded = false
+			collapse(n.children)
+		}
+	}
+	collapse(s.nodes)
+	s.rebuildVisible()
+}
+
 func (s *sidebar) rebuildVisible() {
 	s.visibleRows = []*node{}
 	for _, n := range s.nodes {
@@ -296,6 +308,21 @@ func (s sidebar) SelectedNode() *node {
 		return s.visibleRows[s.cursor]
 	}
 	return nil
+}
+
+func (s sidebar) GetExpandedNodeIDs() []string {
+	var ids []string
+	var collect func(nodes []*node)
+	collect = func(nodes []*node) {
+		for _, n := range nodes {
+			if n.expanded {
+				ids = append(ids, n.id)
+			}
+			collect(n.children)
+		}
+	}
+	collect(s.nodes)
+	return ids
 }
 
 func (s sidebar) NumVisible() int {
