@@ -761,6 +761,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						m.artistDetail.tracksTable.SetCursor(newCursor)
 					}
+				} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter {
+					rows := m.videoList.table.Rows()
+					cursor := m.videoList.table.Cursor()
+					if cursor < len(rows) {
+						m.videoList.marked[cursor] = !m.videoList.marked[cursor]
+						currentPath := ""
+						isPaused := false
+						if m.player != nil {
+							currentPath = m.player.GetCurrentTrackPath()
+							valPause, _ := m.player.GetProperty("pause")
+							if p, ok := valPause.(bool); ok {
+								isPaused = p
+							}
+						}
+						m.videoList.UpdatePlaybackStatus(currentPath, isPaused)
+						newCursor := cursor + 1
+						if newCursor >= len(rows) {
+							newCursor = 0
+						}
+						m.videoList.table.SetCursor(newCursor)
+					}
 				}
 			}
 			return m, nil

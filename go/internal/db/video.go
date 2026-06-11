@@ -7,18 +7,20 @@ import (
 )
 
 type VideoData struct {
-	Path     string
-	Filename string
-	Size     int64
-	Duration int
-	Year     int
-	MTime    float64
-	Type     string
-	Category string
-	Series   string
-	Season   int
-	Episode  int
-	Title    string
+	Path        string
+	Filename    string
+	Size        int64
+	Duration    int
+	Year        int
+	MTime       float64
+	Type        string
+	Category    string
+	Subcategory string
+	Series      string
+	Season      int
+	Episode     int
+	Title       string
+	AirDate     string
 }
 
 type VideoFilter struct {
@@ -104,8 +106,9 @@ func GetVideos() ([]VideoData, error) {
 	rows, err := db.Query(`
 		SELECT 
 			path, filename, size, duration, year, mtime,
-			COALESCE(type, ''), COALESCE(category, ''), COALESCE(series, ''), 
-			COALESCE(season, 0), COALESCE(episode, 0), COALESCE(title, '')
+			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
+			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
+			COALESCE(title, ''), COALESCE(air_date, '')
 		FROM video_files
 		ORDER BY series, season, episode, filename
 	`)
@@ -119,7 +122,8 @@ func GetVideos() ([]VideoData, error) {
 		var v VideoData
 		err := rows.Scan(
 			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
-			&v.Type, &v.Category, &v.Series, &v.Season, &v.Episode, &v.Title,
+			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
+			&v.Title, &v.AirDate,
 		)
 		if err != nil {
 			return nil, err
@@ -156,8 +160,9 @@ func GetVideoPlaylistFiles(playlistID int64) ([]VideoData, error) {
 	rows, err := db.Query(`
 		SELECT 
 			v.path, v.filename, v.size, v.duration, v.year, v.mtime,
-			COALESCE(v.type, ''), COALESCE(v.category, ''), COALESCE(v.series, ''), 
-			COALESCE(v.season, 0), COALESCE(v.episode, 0), COALESCE(v.title, '')
+			COALESCE(v.type, ''), COALESCE(v.category, ''), COALESCE(v.subcategory, ''),
+			COALESCE(v.series, ''), COALESCE(v.season, 0), COALESCE(v.episode, 0), 
+			COALESCE(v.title, ''), COALESCE(v.air_date, '')
 		FROM video_files v
 		JOIN video_playlist_files vpf ON v.path = vpf.file_path
 		WHERE vpf.playlist_id = ?
@@ -173,7 +178,8 @@ func GetVideoPlaylistFiles(playlistID int64) ([]VideoData, error) {
 		var v VideoData
 		err := rows.Scan(
 			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
-			&v.Type, &v.Category, &v.Series, &v.Season, &v.Episode, &v.Title,
+			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
+			&v.Title, &v.AirDate,
 		)
 		if err != nil {
 			return nil, err
@@ -246,8 +252,9 @@ func GetFilteredVideos(conditionsJSON, sortJSON string) ([]VideoData, error) {
 
 	query := `SELECT 
 			path, filename, size, duration, year, mtime,
-			COALESCE(type, ''), COALESCE(category, ''), COALESCE(series, ''), 
-			COALESCE(season, 0), COALESCE(episode, 0), COALESCE(title, '')
+			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
+			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
+			COALESCE(title, ''), COALESCE(air_date, '')
 		FROM video_files`
 	if whereClause != "" {
 		query += " WHERE " + whereClause
@@ -289,7 +296,8 @@ func GetFilteredVideos(conditionsJSON, sortJSON string) ([]VideoData, error) {
 		var v VideoData
 		err := rows.Scan(
 			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
-			&v.Type, &v.Category, &v.Series, &v.Season, &v.Episode, &v.Title,
+			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
+			&v.Title, &v.AirDate,
 		)
 		if err != nil {
 			return nil, err
