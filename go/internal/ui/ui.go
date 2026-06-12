@@ -79,6 +79,8 @@ const (
 	actionCreateVideoFilter
 	actionEditVideoFilter
 	actionDeleteVideoFilter
+	actionEditVideo
+	actionBatchEditVideo
 )
 
 type model struct {
@@ -106,6 +108,8 @@ type model struct {
 	editFieldNames    []string
 	editPaths         []string
 	editAlbumID       int64
+	editVideoFieldNames []string
+	editVideoPaths      []string
 	playingAlbumID    int64
 	currentFilterID   int64
 	currentFilterName string
@@ -351,6 +355,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editFieldNames = nil
 			m.editPaths = nil
 			m.editAlbumID = 0
+			m.editVideoFieldNames = nil
+			m.editVideoPaths = nil
 		}
 		return m, cmd
 	}
@@ -769,6 +775,148 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pendingAction = actionEditVideoFilter
 					m.filterEdit = newFilterEditModal(filter.Name, filter.ConditionsJSON, filter.SortJSON, videoFilterFields, videoFilterOps)
 					m.filterEdit.SetSize(m.width, m.height)
+				}
+			} else if !m.focusedSide {
+				if m.activeView == viewMusicArtistDetail && m.artistDetail.focusedUpper {
+					cursor := m.artistDetail.albumsTable.Cursor()
+					if cursor < 0 || cursor >= len(m.artistDetail.albums) {
+						return m, nil
+					}
+					album := m.artistDetail.albums[cursor]
+
+					m.pendingAction = actionEditAlbum
+					m.editAlbumID = album.ID
+					m.editFieldNames = []string{"artist", "album", "release_date"}
+
+					allTracks, err := db.GetMusicTracksByAlbumID(album.ID)
+					if err != nil {
+						allTracks = nil
+					}
+					m.editPaths = make([]string, len(allTracks))
+					for i, t := range allTracks {
+						m.editPaths[i] = t.Path
+					}
+
+					m.modal = newFormModal("Edit Album",
+						[]string{"Artist", "Album", "Date"},
+						[]string{album.Artist, album.Title, album.ReleaseDate},
+						"Tab: Next  Enter: Save  Esc: Cancel")
+					if m.modal != nil {
+						m.modal.SetSize(m.width, m.height)
+					}
+				} else {
+					var selectedTracks []db.TrackData
+					if m.activeView == viewMusicLibrary {
+						marked := m.trackList.MarkedPaths()
+						if len(marked) > 0 {
+							for _, t := range m.trackList.tracks {
+								for _, p := range marked {
+									if t.Path == p {
+										selectedTracks = append(selectedTracks, t)
+										break
+									}
+								}
+							}
+						} else {
+							cursor := m.trackList.table.Cursor()
+							if cursor >= 0 && cursor < len(m.trackList.tracks) {
+								selectedTracks = []db.TrackData{m.trackList.tracks[cursor]}
+							}
+						}
+					} else if m.activeView == viewMusicArtistDetail && !m.artistDetail.focusedUpper {
+						marked := m.artistDetail.MarkedTracks()
+						if len(marked) > 0 {
+							for _, t := range m.artistDetail.tracks {
+								for _, p := range marked {
+									if t.Path == p {
+										selectedTracks = append(selectedTracks, t)
+										break
+									}
+								}
+							}
+						} else {
+							track, ok := m.artistDetail.SelectedTrack()
+							if ok {
+								selectedTracks = []db.TrackData{track}
+							}
+						}
+					} else if m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
+						cursor := m.trackList.table.Cursor()
+						if cursor >= 0 && cursor < len(m.trackList.tracks) {
+							selectedTracks = []db.TrackData{m.trackList.tracks[cursor]}
+						}
+					}
+
+					if len(selectedTracks) == 0 {
+						return m, nil
+					}
+
+					m.editPaths = make([]string, len(selectedTracks))
+					for i, t := range selectedTracks {
+						m.editPaths[i] = t.Path
+					}
+
+					m.editFieldNames = []string{"title", "genre"}
+					labels := []string{"Title", "Genre"}
+					initialValues := make([]string, 2)
+					for i, field := range m.editFieldNames {
+						var commonVal string
+						allSame := true
+						for j, t := range selectedTracks {
+							var val string
+							switch field {
+							case "title":
+								val = t.Title
+							case "genre":
+								val = t.Genre
+							}
+							if j == 0 {
+								commonVal = val
+							} else if val != commonVal {
+								allSame = false
+								break
+							}
+						}
+						if allSame {
+							initialValues[i] = commonVal
+						}
+					}
+
+					m.pendingAction = actionEditTrack
+					m.modal = newFormModal(
+						fmt.Sprintf("Edit Track (%d)", len(selectedTracks)),
+						labels, initialValues,
+						"Tab: Next  Enter: Save  Esc: Cancel")
+					if m.modal != nil {
+						m.modal.SetSize(m.width, m.height)
+					}
+				}
+
+				videoViews := map[viewState]bool{
+					viewVideoLibrary: true, viewVideoContinue: true,
+					viewVideoRecent: true, viewVideoHealth: true, viewVideoFilter: true,
+				}
+				if videoViews[m.activeView] {
+					markedPaths := m.videoList.MarkedPaths()
+					if len(markedPaths) > 0 {
+						m.editVideoPaths = markedPaths
+						m.editVideoFieldNames = videoEditFieldNames
+						m.pendingAction = actionBatchEditVideo
+						initialValues := videoBatchEditInitialValues()
+						m.modal = newFormModal("Batch Edit Video", videoEditLabels, initialValues, "Tab/Shift+Tab: navigate  Enter: Save  Esc: Cancel")
+						m.modal.SetSize(m.width, m.height)
+					} else {
+						cursor := m.videoList.table.Cursor()
+						if cursor >= 0 && cursor < len(m.videoList.videos) {
+							v := m.videoList.videos[cursor]
+							m.editVideoPaths = []string{v.Path}
+							m.editVideoFieldNames = videoEditFieldNames
+							m.pendingAction = actionEditVideo
+							initialValues := videoEditInitialValues(v)
+							m.modal = newFormModal("Edit Video", videoEditLabels, initialValues, "Tab/Shift+Tab: navigate  Enter: Save  Esc: Cancel")
+							m.modal.SetSize(m.width, m.height)
+						}
+					}
 				}
 			}
 			return m, nil
@@ -1323,7 +1471,8 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 	case actionEditTrack:
 		for i, field := range m.editFieldNames {
 			val := strings.TrimSpace(result.values[i])
-			if val == "" {
+			allowEmpty := field == "genre"
+			if val == "" && !allowEmpty {
 				continue
 			}
 
@@ -1352,7 +1501,24 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 			m.refreshTrackList(artist, album)
 		} else if m.activeView == viewMusicArtistDetail {
 			sbWidth := m.getSidebarWidth()
+			albumCursor := m.artistDetail.albumsTable.Cursor()
+			trackCursor := m.artistDetail.tracksTable.Cursor()
+			wasFocusedUpper := m.artistDetail.focusedUpper
+			wasFocused := m.focusedSide
 			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-1, m.height-8, m.artistDetail.artist, m.artistDetail.albums)
+			if albumCursor >= 0 && albumCursor < len(m.artistDetail.albums) {
+				m.artistDetail.albumsTable.SetCursor(albumCursor)
+				m.artistDetail.loadTracksForAlbum(m.artistDetail.albums[albumCursor].Title)
+				if trackCursor >= 0 && trackCursor < len(m.artistDetail.tracks) {
+					m.artistDetail.tracksTable.SetCursor(trackCursor)
+				}
+			}
+			m.artistDetail.focusedUpper = wasFocusedUpper
+			m.artistDetail.SetFocus(!wasFocused)
+		} else if m.activeView == viewMusicRecent {
+			m.refreshRecentTracks()
+		} else if m.activeView == viewMusicFilter {
+			m.refreshFilterTracks(m.currentFilterID)
 		}
 
 	case actionEditAlbum:
@@ -1381,9 +1547,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 			tags := map[string]string{
 				"artist": newArtist,
 				"album":  newAlbum,
-			}
-			if newDate != "" {
-				tags["date"] = newDate
+				"date":   newDate,
 			}
 			if err := library.WriteAudioTags(path, tags); err != nil {
 				log.Printf("Failed to write tags to %s: %v", path, err)
@@ -1426,7 +1590,26 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 
 		// Sync main view with the restored sidebar selection
 		if n := m.sidebar.SelectedNode(); n != nil {
-			m.handleSidebarChange(n)
+			// Preserve artist detail cursor positions if we're in artist detail view
+			if m.activeView == viewMusicArtistDetail {
+				savedAlbumCursor := m.artistDetail.albumsTable.Cursor()
+				savedTrackCursor := m.artistDetail.tracksTable.Cursor()
+				savedFocusedUpper := m.artistDetail.focusedUpper
+				m.handleSidebarChange(n)
+				if m.activeView == viewMusicArtistDetail {
+					if savedAlbumCursor >= 0 && savedAlbumCursor < len(m.artistDetail.albums) {
+						m.artistDetail.albumsTable.SetCursor(savedAlbumCursor)
+						m.artistDetail.loadTracksForAlbum(m.artistDetail.albums[savedAlbumCursor].Title)
+						if savedTrackCursor >= 0 && savedTrackCursor < len(m.artistDetail.tracks) {
+							m.artistDetail.tracksTable.SetCursor(savedTrackCursor)
+						}
+					}
+					m.artistDetail.focusedUpper = savedFocusedUpper
+					m.artistDetail.syncTableFocus()
+				}
+			} else {
+				m.handleSidebarChange(n)
+			}
 		}
 
 		m.modal = nil
@@ -1457,6 +1640,29 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		m.activeView = viewVideoLibrary
 		m.sidebar.Refresh()
 		m.modal = nil
+
+	case actionEditVideo, actionBatchEditVideo:
+		updated := 0
+		for i, field := range m.editVideoFieldNames {
+			val := result.values[i]
+			if val == "" {
+				continue
+			}
+			for _, path := range m.editVideoPaths {
+				if err := db.UpdateVideoField(path, field, val); err == nil {
+					updated++
+				}
+			}
+		}
+		if updated > 0 {
+			m.message = fmt.Sprintf("Updated %d video(s)", len(m.editVideoPaths))
+		} else {
+			m.message = "No changes"
+		}
+		m.modal = nil
+		m.editVideoFieldNames = nil
+		m.editVideoPaths = nil
+		m.refreshCurrentVideoView()
 	}
 
 	return m
@@ -1520,6 +1726,23 @@ func (m *model) refreshVideoHealth() {
 	videos, _ := db.GetUnhealthyVideos()
 	m.videoList = newVideoListFromVideos(m.width-sbWidth-1, m.height-6, videos)
 	m.syncFocus()
+}
+
+func (m *model) refreshCurrentVideoView() {
+	switch m.activeView {
+	case viewVideoLibrary:
+		m.refreshVideoList()
+	case viewVideoContinue:
+		m.refreshVideoContinue()
+	case viewVideoRecent:
+		m.refreshVideoRecent()
+	case viewVideoHealth:
+		m.refreshVideoHealth()
+	case viewVideoFilter:
+		if m.currentVideoFilterID > 0 {
+			m.refreshVideoFilterTracks(m.currentVideoFilterID)
+		}
+	}
 }
 
 func (m *model) coverDisplayCmd() tea.Cmd {

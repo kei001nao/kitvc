@@ -325,6 +325,24 @@ func ClearVideoLastPos(path string) error {
 	return err
 }
 
+var videoAllowedFields = map[string]bool{
+	"type": true, "category": true, "subcategory": true,
+	"series": true, "season": true, "episode": true,
+	"title": true, "air_date": true, "genres": true,
+	"synopsis": true, "year": true, "cast": true,
+	"director": true, "series_overview": true, "episode_overview": true,
+	"tmdb_id": true, "poster_path": true,
+}
+
+func UpdateVideoField(path, field, value string) error {
+	if !videoAllowedFields[field] {
+		return fmt.Errorf("field %q is not allowed for update", field)
+	}
+	query := fmt.Sprintf("UPDATE video_files SET %s = ? WHERE path = ?", field)
+	_, err := db.Exec(query, value, path)
+	return err
+}
+
 func GetContinueWatchingVideos() ([]VideoData, error) {
 	rows, err := db.Query(`
 		SELECT 
