@@ -1,46 +1,53 @@
 package ui
 
 import (
-	"github.com/charmbracelet/bubbles/table"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/evertras/bubble-table/table"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+)
+
+const (
+	artistColName = "artist"
 )
 
 type musicArtists struct {
-	table  table.Model
-	styles table.Styles
+	table table.Model
 }
 
 func newMusicArtists(width, height int, artists []string) musicArtists {
-	t := table.New(
-		table.WithColumns([]table.Column{{Title: "Artist", Width: width - 2}}),
-		table.WithFocused(true),
-		table.WithHeight(height - 4),
-		table.WithWidth(width),
-	)
-
-	var rows []table.Row
-	for _, artist := range artists {
-		rows = append(rows, table.Row{artist})
+	rows := make([]table.Row, len(artists))
+	for i, artist := range artists {
+		rows[i] = table.NewRow(table.RowData{
+			artistColName: artist,
+		})
 	}
 
-	s := table.DefaultStyles()
-	s.Header = s.Header.
+	headerStyle := lipgloss.NewStyle().
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("240")).
 		BorderBottom(false).
 		Foreground(lipgloss.Color("5")).
 		Bold(true)
-	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
-	t.SetStyles(s)
 
-	ma := musicArtists{table: t, styles: s}
-	ma.SetSize(width, height)
-	ma.table.SetRows(rows)
-	return ma
+	highlightStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("229")).
+		Background(lipgloss.Color("57"))
+
+	cols := []table.Column{
+		table.NewColumn(artistColName, "Artist", 40).WithStyle(lipgloss.NewStyle().Align(lipgloss.Left)),
+	}
+
+	t := table.New(cols).
+		WithRows(rows).
+		WithTargetHeight(height - 4).
+		WithMaxTotalWidth(width).
+		HeaderStyle(headerStyle).
+		HighlightStyle(highlightStyle).
+		Focused(true).
+		WithBorderForeground(lipgloss.Color("240")).
+		Border(emptyBorder)
+
+	return musicArtists{table: t}
 }
 
 func (ma musicArtists) Update(msg tea.Msg) (musicArtists, tea.Cmd) {
@@ -57,30 +64,19 @@ func (ma *musicArtists) SetSize(w, h int) {
 	if w <= 0 {
 		w = 1
 	}
-	ma.table.SetWidth(w)
-	ma.table.SetHeight(h - 4)
-
-	cols := []table.Column{
-		{Title: "Artist", Width: w - 2},
-	}
-	ma.table.SetColumns(cols)
+	ma.table = ma.table.
+		WithMaxTotalWidth(w).
+		WithTargetHeight(h - 4)
 }
 
 func (ma *musicArtists) SetFocus(f bool) {
-	if f {
-		ma.table.Focus()
-		ma.styles.Selected = ma.styles.Selected.Background(lipgloss.Color("57"))
-	} else {
-		ma.table.Blur()
-		ma.styles.Selected = ma.styles.Selected.Background(lipgloss.Color("240"))
-	}
-	ma.table.SetStyles(ma.styles)
+	ma.table = ma.table.Focused(f)
 }
 
 func (ma musicArtists) SelectedArtist() string {
-	row := ma.table.SelectedRow()
-	if len(row) > 0 {
-		return row[0]
+	row := ma.table.HighlightedRow()
+	if val, ok := row.Data[artistColName].(string); ok {
+		return val
 	}
 	return ""
 }

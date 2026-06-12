@@ -4,14 +4,88 @@ import (
 	"strconv"
 	"kitvc/internal/db"
 
-	"github.com/charmbracelet/bubbles/table"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/evertras/bubble-table/table"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+)
+
+var emptyBorder = table.Border{
+	Top:    "", Left: "", Right: "", Bottom: "",
+	TopRight: "", TopLeft: "", BottomRight: "", BottomLeft: "",
+	TopJunction: "", LeftJunction: "", RightJunction: "", BottomJunction: "",
+	InnerJunction: "", InnerDivider: " ",
+}
+
+type colSpec struct {
+	key   string
+	title string
+	min   int
+	max   int
+	flex  int
+	left  bool
+}
+
+func calcColWidths(specs []colSpec, totalWidth int) map[string]int {
+	minTotal := 0
+	flexTotal := 0
+	for _, s := range specs {
+		minTotal += s.min
+		flexTotal += s.flex
+	}
+
+	extra := totalWidth - minTotal
+	if extra < 0 {
+		extra = 0
+	}
+
+	widths := make(map[string]int, len(specs))
+	remaining := extra
+	for _, s := range specs {
+		if flexTotal > 0 && s.flex > 0 {
+			w := s.min + extra*s.flex/flexTotal
+			if s.max > 0 && w > s.max {
+				w = s.max
+			}
+			widths[s.key] = w
+			remaining -= (w - s.min)
+		} else {
+			widths[s.key] = s.min
+		}
+	}
+	for remaining > 0 {
+		added := false
+		for _, s := range specs {
+			if remaining <= 0 {
+				break
+			}
+			if flexTotal > 0 && s.flex > 0 {
+				w := widths[s.key] + 1
+				if s.max <= 0 || w <= s.max {
+					widths[s.key] = w
+					remaining--
+					added = true
+				}
+			}
+		}
+		if !added {
+			break
+		}
+	}
+	return widths
+}
+
+const (
+	trackColMark     = "mark"
+	trackColNum      = "num"
+	trackColAlbNum   = "albnum"
+	trackColTitle    = "title"
+	trackColArtist   = "artist"
+	trackColAlbum    = "album"
+	trackColDuration = "duration"
 )
 
 type trackList struct {
 	table  table.Model
-	styles table.Styles
 	tracks []db.TrackData
 	marked map[int]bool
 }
@@ -22,43 +96,78 @@ func newTrackList(width, height int, artist, albumTitle string) trackList {
 }
 
 func newTrackListFromTracks(width, height int, tracks []db.TrackData) trackList {
-	t := table.New(
-		table.WithColumns([]table.Column{{Title: "Initializing...", Width: 10}}), // Dummy column to prevent panic
-		table.WithFocused(true),
-		table.WithHeight(height-4),
-		table.WithWidth(width),
-	)
+	tl := trackList{tracks: tracks, marked: make(map[int]bool)}
+	tl.table = tl.buildTable(width, height, tracks)
+	return tl
+}
 
-	var rows []table.Row
+func (tl trackList) buildTable(width, height int, tracks []db.TrackData) table.Model {
+	cols := tl.buildColumns(width)
+
+	rows := make([]table.Row, len(tracks))
 	for i, t := range tracks {
-		rows = append(rows, table.Row{
-			"",                        // M
-			strconv.Itoa(i + 1),       // #
-			strconv.Itoa(t.TrackNum),  // Alb#
-			t.Title,
-			t.Artist,
-			t.Album,
-			formatDuration(t.Duration),
+		rows[i] = table.NewRow(table.RowData{
+			trackColMark:     "",
+			trackColNum:      strconv.Itoa(i + 1),
+			trackColAlbNum:   strconv.Itoa(t.TrackNum),
+			trackColTitle:    t.Title,
+			trackColArtist:   t.Artist,
+			trackColAlbum:    t.Album,
+			trackColDuration: formatDuration(t.Duration),
 		})
 	}
 
-	s := table.DefaultStyles()
-	s.Header = s.Header.
+	headerStyle := lipgloss.NewStyle().
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("240")).
 		BorderBottom(false).
 		Foreground(lipgloss.Color("5")).
 		Bold(true)
-	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
-	t.SetStyles(s)
 
-	tl := trackList{table: t, styles: s, tracks: tracks, marked: make(map[int]bool)}
-	tl.SetSize(width, height)
-	tl.table.SetRows(rows)
-	return tl
+	highlightStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("229")).
+		Background(lipgloss.Color("57"))
+
+	t := table.New(cols).
+		WithRows(rows).
+		WithTargetHeight(height - 4).
+		WithMaxTotalWidth(width).
+		WithHorizontalFreezeColumnCount(3).
+		HeaderStyle(headerStyle).
+		HighlightStyle(highlightStyle).
+		Focused(true).
+		WithBorderForeground(lipgloss.Color("240")).
+		Border(emptyBorder)
+
+	return t
+}
+
+func (tl trackList) buildColumns(width int) []table.Column {
+	leftAlign := lipgloss.NewStyle().Align(lipgloss.Left)
+	specs := []colSpec{
+		{trackColMark, "M", 1, 1, 0, false},
+		{trackColNum, "#", 3, 3, 0, false},
+		{trackColAlbNum, "Alb#", 4, 4, 0, false},
+		{trackColTitle, "Title", 8, 20, 1, true},
+		{trackColArtist, "Artist", 6, 16, 1, true},
+		{trackColAlbum, "Album", 8, 20, 1, true},
+		{trackColDuration, "Duration", 8, 8, 0, false},
+	}
+	dividers := len(specs) - 1
+	colWidth := width - dividers
+	if colWidth < 0 {
+		colWidth = 0
+	}
+	w := calcColWidths(specs, colWidth)
+	return []table.Column{
+		table.NewColumn(trackColMark, "M", w[trackColMark]),
+		table.NewColumn(trackColNum, "#", w[trackColNum]),
+		table.NewColumn(trackColAlbNum, "Alb#", w[trackColAlbNum]),
+		table.NewColumn(trackColTitle, "Title", w[trackColTitle]).WithStyle(leftAlign),
+		table.NewColumn(trackColArtist, "Artist", w[trackColArtist]).WithStyle(leftAlign),
+		table.NewColumn(trackColAlbum, "Album", w[trackColAlbum]).WithStyle(leftAlign),
+		table.NewColumn(trackColDuration, "Duration", w[trackColDuration]),
+	}
 }
 
 func (tl trackList) Update(msg tea.Msg) (trackList, tea.Cmd) {
@@ -75,52 +184,21 @@ func (tl *trackList) SetSize(w, h int) {
 	if w <= 0 {
 		w = 1
 	}
-	tl.table.SetWidth(w)
-	tl.table.SetHeight(h - 4)
-	
-	avail := w - 27
-	if avail < 15 {
-		avail = 15
-	}
-
-	durationWidth := 10
-	otherAvail := avail - durationWidth
-	if otherAvail < 10 {
-		otherAvail = 10
-	}
-
-	cols := []table.Column{
-		{Title: "M", Width: 3},
-		{Title: "#", Width: 4},
-		{Title: "Alb#", Width: 6},
-		{Title: "Title", Width: otherAvail * 4 / 10},
-		{Title: "Artist", Width: otherAvail * 3 / 10},
-		{Title: "Album", Width: otherAvail - (otherAvail * 4 / 10) - (otherAvail * 3 / 10)},
-		{Title: "Duration", Width: durationWidth},
-	}
-	
-	for i := 3; i < 6; i++ {
-		if cols[i].Width < 4 { cols[i].Width = 4 }
-	}
-
-	tl.table.SetColumns(cols)
+	cols := tl.buildColumns(w)
+	tl.table = tl.table.
+		WithColumns(cols).
+		WithMaxTotalWidth(w).
+		WithTargetHeight(h - 4)
 }
 
 func (tl *trackList) SetFocus(f bool) {
-	if f {
-		tl.table.Focus()
-		tl.styles.Selected = tl.styles.Selected.Background(lipgloss.Color("57"))
-	} else {
-		tl.table.Blur()
-		tl.styles.Selected = tl.styles.Selected.Background(lipgloss.Color("240"))
-	}
-	tl.table.SetStyles(tl.styles)
+	tl.table = tl.table.Focused(f)
 }
 
 func (tl *trackList) UpdatePlaybackStatus(currentPath string, isPaused bool) {
-	rows := tl.table.Rows()
+	rows := tl.table.GetVisibleRows()
 	changed := false
-	
+
 	for i, t := range tl.tracks {
 		var mark string
 		switch {
@@ -131,15 +209,18 @@ func (tl *trackList) UpdatePlaybackStatus(currentPath string, isPaused bool) {
 		case tl.marked[i]:
 			mark = "●"
 		}
-		
-		if i < len(rows) && rows[i][0] != mark {
-			rows[i][0] = mark
-			changed = true
+
+		if i < len(rows) {
+			currentMark, _ := rows[i].Data[trackColMark].(string)
+			if currentMark != mark {
+				rows[i].Data[trackColMark] = mark
+				changed = true
+			}
 		}
 	}
-	
+
 	if changed {
-		tl.table.SetRows(rows)
+		tl.table = tl.table.WithRows(rows)
 	}
 }
 
@@ -155,4 +236,16 @@ func (tl *trackList) MarkedPaths() []string {
 		}
 	}
 	return paths
+}
+
+func (tl trackList) SelectedRow() table.Row {
+	return tl.table.HighlightedRow()
+}
+
+func (tl trackList) Cursor() int {
+	return tl.table.GetHighlightedRowIndex()
+}
+
+func (tl *trackList) SetCursor(n int) {
+	tl.table = tl.table.WithHighlightedRow(n)
 }

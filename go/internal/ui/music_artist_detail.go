@@ -4,9 +4,14 @@ import (
 	"strconv"
 	"kitvc/internal/db"
 
-	"github.com/charmbracelet/bubbles/table"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/evertras/bubble-table/table"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+)
+
+const (
+	albumColDate  = "date"
+	albumColTitle = "album"
 )
 
 type musicArtistDetail struct {
@@ -18,52 +23,51 @@ type musicArtistDetail struct {
 	focusedUpper bool
 	width        int
 	height       int
-	styles       table.Styles
 	marked       map[int]bool
 }
 
 func newMusicArtistDetail(width, height int, artist string, albums []db.Album) musicArtistDetail {
-	// 1. Albums table (Upper)
-	at := table.New(
-		table.WithColumns([]table.Column{
-			{Title: "Date", Width: 12},
-			{Title: "Album", Width: width - 15},
-		}),
-		table.WithFocused(true),
-		table.WithHeight(5), // Fixed height for albums table
-		table.WithWidth(width),
-	)
-
-	var albumRows []table.Row
-	for _, album := range albums {
-		albumRows = append(albumRows, table.Row{album.ReleaseDate, album.Title})
-	}
-	at.SetRows(albumRows)
-
-	// 2. Tracks table (Lower) - Initialized empty
-	tt := table.New(
-		table.WithColumns([]table.Column{
-			{Title: "Initializing...", Width: 10},
-		}),
-		table.WithFocused(false),
-		table.WithHeight(height - 12), // Adjusted for albums, labels, borders
-		table.WithWidth(width),
-	)
-
-	s := table.DefaultStyles()
-	s.Header = s.Header.
+	headerStyle := lipgloss.NewStyle().
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("240")).
 		BorderBottom(false).
 		Foreground(lipgloss.Color("5")).
 		Bold(true)
-	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
 
-	at.SetStyles(s)
-	tt.SetStyles(s)
+	highlightStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("229")).
+		Background(lipgloss.Color("57"))
+
+	// 1. Albums table (Upper)
+	albumRows := make([]table.Row, len(albums))
+	for i, album := range albums {
+		albumRows[i] = table.NewRow(table.RowData{
+			albumColDate:  album.ReleaseDate,
+			albumColTitle: album.Title,
+		})
+	}
+
+	at := table.New(buildAlbumCols(width)).
+		WithRows(albumRows).
+		WithTargetHeight(5).
+		WithMaxTotalWidth(width).
+		HeaderStyle(headerStyle).
+		HighlightStyle(highlightStyle).
+		Focused(true).
+		WithBorderForeground(lipgloss.Color("240")).
+		Border(emptyBorder)
+
+	// 2. Tracks table (Lower) - Initialized empty
+	tt := table.New([]table.Column{
+		table.NewColumn("dummy", "Initializing...", 10),
+	}).
+		WithTargetHeight(height - 12).
+		WithMaxTotalWidth(width).
+		HeaderStyle(headerStyle).
+		HighlightStyle(highlightStyle).
+		Focused(false).
+		WithBorderForeground(lipgloss.Color("240")).
+		Border(emptyBorder)
 
 	mad := musicArtistDetail{
 		artist:       artist,
@@ -73,12 +77,11 @@ func newMusicArtistDetail(width, height int, artist string, albums []db.Album) m
 		focusedUpper: true,
 		width:        width,
 		height:       height,
-		styles:       s,
 		marked:       make(map[int]bool),
 	}
 
 	mad.SetSize(width, height)
-	
+
 	// Load tracks for the first album if any
 	if len(albums) > 0 {
 		mad.loadTracksForAlbum(albums[0].Title)
@@ -87,45 +90,60 @@ func newMusicArtistDetail(width, height int, artist string, albums []db.Album) m
 	return mad
 }
 
+func buildAlbumCols(width int) []table.Column {
+	leftAlign := lipgloss.NewStyle().Align(lipgloss.Left)
+	specs := []colSpec{
+		{albumColDate, "Date", 10, 10, 0, true},
+		{albumColTitle, "Album", 15, 25, 1, true},
+	}
+	dividers := len(specs) - 1
+	colWidth := width - dividers
+	if colWidth < 0 {
+		colWidth = 0
+	}
+	w := calcColWidths(specs, colWidth)
+	return []table.Column{
+		table.NewColumn(albumColDate, "Date", w[albumColDate]).WithStyle(leftAlign),
+		table.NewColumn(albumColTitle, "Album", w[albumColTitle]).WithStyle(leftAlign),
+	}
+}
+
 func (mad *musicArtistDetail) loadTracksForAlbum(albumTitle string) {
 	tracks, _ := db.GetMusicTracks(mad.artist, albumTitle)
 	mad.tracks = tracks
 	mad.ClearMarks()
 
-	var rows []table.Row
+	rows := make([]table.Row, len(tracks))
 	for i, t := range tracks {
-		rows = append(rows, table.Row{
-			"",                        // M
-			strconv.Itoa(i + 1),       // #
-			strconv.Itoa(t.TrackNum),  // Alb#
-			t.Title,
-			t.Artist,
-			t.Album,
-			formatDuration(t.Duration),
+		rows[i] = table.NewRow(table.RowData{
+			trackColMark:     "",
+			trackColNum:      strconv.Itoa(i + 1),
+			trackColAlbNum:   strconv.Itoa(t.TrackNum),
+			trackColTitle:    t.Title,
+			trackColArtist:   t.Artist,
+			trackColAlbum:    t.Album,
+			trackColDuration: formatDuration(t.Duration),
 		})
 	}
-	mad.tracksTable.SetRows(rows)
+	mad.tracksTable = mad.tracksTable.WithRows(rows)
 	if len(rows) > 0 {
-		mad.tracksTable.SetCursor(0)
+		mad.tracksTable = mad.tracksTable.WithHighlightedRow(0)
 	}
 }
 
 func (mad musicArtistDetail) Update(msg tea.Msg) (musicArtistDetail, tea.Cmd) {
 	var cmd tea.Cmd
 
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		switch keyMsg.String() {
 		case "enter":
 			if mad.focusedUpper {
-				// Move focus to tracks list
 				mad.focusedUpper = false
 				mad.syncTableFocus()
 				return mad, nil
 			}
-			// If lower is focused, Enter is handled by main ui.go to play the track
 		case "esc":
 			if !mad.focusedUpper {
-				// Return focus to albums list
 				mad.focusedUpper = true
 				mad.syncTableFocus()
 				return mad, nil
@@ -134,11 +152,10 @@ func (mad musicArtistDetail) Update(msg tea.Msg) (musicArtistDetail, tea.Cmd) {
 	}
 
 	if mad.focusedUpper {
-		oldCursor := mad.albumsTable.Cursor()
+		oldCursor := mad.albumsTable.GetHighlightedRowIndex()
 		mad.albumsTable, cmd = mad.albumsTable.Update(msg)
-		newCursor := mad.albumsTable.Cursor()
+		newCursor := mad.albumsTable.GetHighlightedRowIndex()
 
-		// If album selection changed, load new tracks
 		if oldCursor != newCursor && newCursor >= 0 && newCursor < len(mad.albums) {
 			mad.loadTracksForAlbum(mad.albums[newCursor].Title)
 		}
@@ -153,7 +170,6 @@ func (mad musicArtistDetail) View() string {
 	albumsLabel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5")).Render("Albums")
 	tracksLabel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5")).Render("Tracks")
 
-	// Render tables
 	albumsView := mad.albumsTable.View()
 	tracksView := mad.tracksTable.View()
 
@@ -173,102 +189,88 @@ func (mad *musicArtistDetail) SetSize(w, h int) {
 	mad.width = w
 	mad.height = h
 
-	// Upper Table: height 5
-	mad.albumsTable.SetWidth(w)
-	mad.albumsTable.SetHeight(5)
-	mad.albumsTable.SetColumns([]table.Column{
-		{Title: "Date", Width: 12},
-		{Title: "Album", Width: w - 15},
-	})
+	// Upper Table: 1/3 of available height
+	upperHeight := h / 3
+	if upperHeight < 3 {
+		upperHeight = 3
+	}
+	mad.albumsTable = mad.albumsTable.
+		WithColumns(buildAlbumCols(w)).
+		WithMaxTotalWidth(w).
+		WithTargetHeight(upperHeight)
 
-	// Lower Table: height h - 14 (space for header/footer, labels, space, albums table)
-	lowerHeight := h - 14
+	// Lower Table: remaining height minus labels and gaps
+	lowerHeight := h - upperHeight - 6
 	if lowerHeight < 3 {
 		lowerHeight = 3
 	}
-	mad.tracksTable.SetWidth(w)
-	mad.tracksTable.SetHeight(lowerHeight)
 
-	avail := w - 27
-	if avail < 15 {
-		avail = 15
-	}
+	mad.tracksTable = mad.tracksTable.
+		WithMaxTotalWidth(w).
+		WithTargetHeight(lowerHeight).
+		WithColumns(buildTrackCols(w))
+}
 
-	durationWidth := 10
-	otherAvail := avail - durationWidth
-	if otherAvail < 10 {
-		otherAvail = 10
+func buildTrackCols(width int) []table.Column {
+	leftAlign := lipgloss.NewStyle().Align(lipgloss.Left)
+	specs := []colSpec{
+		{trackColMark, "M", 1, 1, 0, false},
+		{trackColNum, "#", 4, 4, 0, false},
+		{trackColAlbNum, "Alb#", 6, 6, 0, false},
+		{trackColTitle, "Title", 10, 20, 1, true},
+		{trackColArtist, "Artist", 8, 16, 1, true},
+		{trackColAlbum, "Album", 10, 20, 1, true},
+		{trackColDuration, "Duration", 8, 8, 0, false},
 	}
-
-	cols := []table.Column{
-		{Title: "M", Width: 3},
-		{Title: "#", Width: 4},
-		{Title: "Alb#", Width: 6},
-		{Title: "Title", Width: otherAvail * 4 / 10},
-		{Title: "Artist", Width: otherAvail * 3 / 10},
-		{Title: "Album", Width: otherAvail - (otherAvail * 4 / 10) - (otherAvail * 3 / 10)},
-		{Title: "Duration", Width: durationWidth},
+	dividers := len(specs) - 1
+	colWidth := width - dividers
+	if colWidth < 0 {
+		colWidth = 0
 	}
-	for i := 3; i < 6; i++ {
-		if cols[i].Width < 4 {
-			cols[i].Width = 4
-		}
+	w := calcColWidths(specs, colWidth)
+	return []table.Column{
+		table.NewColumn(trackColMark, "M", w[trackColMark]),
+		table.NewColumn(trackColNum, "#", w[trackColNum]),
+		table.NewColumn(trackColAlbNum, "Alb#", w[trackColAlbNum]),
+		table.NewColumn(trackColTitle, "Title", w[trackColTitle]).WithStyle(leftAlign),
+		table.NewColumn(trackColArtist, "Artist", w[trackColArtist]).WithStyle(leftAlign),
+		table.NewColumn(trackColAlbum, "Album", w[trackColAlbum]).WithStyle(leftAlign),
+		table.NewColumn(trackColDuration, "Duration", w[trackColDuration]),
 	}
-	mad.tracksTable.SetColumns(cols)
 }
 
 func (mad *musicArtistDetail) SetFocus(f bool) {
 	if f {
 		mad.syncTableFocus()
 	} else {
-		mad.albumsTable.Blur()
-		mad.tracksTable.Blur()
-		mad.albumsTable.SetStyles(mad.getStyles(false))
-		mad.tracksTable.SetStyles(mad.getStyles(false))
+		mad.albumsTable = mad.albumsTable.Focused(false)
+		mad.tracksTable = mad.tracksTable.Focused(false)
 	}
 }
 
 func (mad *musicArtistDetail) syncTableFocus() {
 	if mad.focusedUpper {
-		mad.albumsTable.Focus()
-		mad.tracksTable.Blur()
-		mad.albumsTable.SetStyles(mad.getStyles(true))
-		mad.tracksTable.SetStyles(mad.getStyles(false))
+		mad.albumsTable = mad.albumsTable.Focused(true)
+		mad.tracksTable = mad.tracksTable.Focused(false)
 	} else {
-		mad.albumsTable.Blur()
-		mad.tracksTable.Focus()
-		mad.albumsTable.SetStyles(mad.getStyles(false))
-		mad.tracksTable.SetStyles(mad.getStyles(true))
+		mad.albumsTable = mad.albumsTable.Focused(false)
+		mad.tracksTable = mad.tracksTable.Focused(true)
 	}
-}
-
-func (mad musicArtistDetail) getStyles(focused bool) table.Styles {
-	s := mad.styles
-	if focused {
-		s.Selected = s.Selected.Background(lipgloss.Color("57"))
-	} else {
-		s.Selected = s.Selected.Background(lipgloss.Color("240"))
-	}
-	return s
 }
 
 func (mad musicArtistDetail) SelectedAlbum() (string, bool) {
-	row := mad.albumsTable.SelectedRow()
-	if len(row) < 2 {
-		return "", false
+	row := mad.albumsTable.HighlightedRow()
+	if val, ok := row.Data[albumColTitle].(string); ok {
+		return val, true
 	}
-	return row[1], true
+	return "", false
 }
 
 func (mad musicArtistDetail) SelectedTrack() (db.TrackData, bool) {
 	if mad.focusedUpper {
 		return db.TrackData{}, false
 	}
-	row := mad.tracksTable.SelectedRow()
-	if len(row) == 0 {
-		return db.TrackData{}, false
-	}
-	cursor := mad.tracksTable.Cursor()
+	cursor := mad.tracksTable.GetHighlightedRowIndex()
 	if cursor >= 0 && cursor < len(mad.tracks) {
 		return mad.tracks[cursor], true
 	}
@@ -276,9 +278,9 @@ func (mad musicArtistDetail) SelectedTrack() (db.TrackData, bool) {
 }
 
 func (mad *musicArtistDetail) UpdatePlaybackStatus(currentPath string, isPaused bool) {
-	rows := mad.tracksTable.Rows()
+	rows := mad.tracksTable.GetVisibleRows()
 	changed := false
-	
+
 	for i, t := range mad.tracks {
 		var mark string
 		switch {
@@ -289,15 +291,18 @@ func (mad *musicArtistDetail) UpdatePlaybackStatus(currentPath string, isPaused 
 		case mad.marked[i]:
 			mark = "●"
 		}
-		
-		if i < len(rows) && rows[i][0] != mark {
-			rows[i][0] = mark
-			changed = true
+
+		if i < len(rows) {
+			currentMark, _ := rows[i].Data[trackColMark].(string)
+			if currentMark != mark {
+				rows[i].Data[trackColMark] = mark
+				changed = true
+			}
 		}
 	}
-	
+
 	if changed {
-		mad.tracksTable.SetRows(rows)
+		mad.tracksTable = mad.tracksTable.WithRows(rows)
 	}
 }
 

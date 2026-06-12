@@ -3,10 +3,10 @@ package ui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type modalKind int
@@ -51,7 +51,7 @@ func newTextInputModal(title, placeholder, help string) *modal {
 	ti.Placeholder = placeholder
 	ti.Focus()
 	ti.CharLimit = 100
-	ti.Width = 30
+	ti.SetWidth(30)
 
 	return &modal{
 		kind:      modalTextInput,
@@ -85,7 +85,7 @@ func newFormModal(title string, labels []string, initialValues []string, help st
 		ti.Placeholder = labels[i]
 		ti.SetValue(initialValues[i])
 		ti.CharLimit = 200
-		ti.Width = 30
+		ti.SetWidth(30)
 		if i == 0 {
 			ti.Focus()
 		}
@@ -195,7 +195,7 @@ func (m *modal) View() string {
 
 	switch m.kind {
 	case modalTextInput:
-		m.textInput.Width = innerW
+		m.textInput.SetWidth(innerW)
 		content = lipgloss.JoinVertical(lipgloss.Left,
 			lipgloss.NewStyle().Bold(true).Render(m.title),
 			"",
@@ -217,7 +217,7 @@ func (m *modal) View() string {
 		}
 
 		maxH := 10
-		vp := viewport.New(innerW, maxH)
+		vp := viewport.New(viewport.WithWidth(innerW), viewport.WithHeight(maxH))
 		vp.SetContent(strings.Join(itemViews, "\n"))
 		vp.GotoTop()
 
@@ -239,7 +239,7 @@ func (m *modal) View() string {
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Render(m.title))
 		lines = append(lines, "")
 		for _, f := range m.formFields {
-			f.Input.Width = innerW - 2
+			f.Input.SetWidth(innerW - 2)
 			lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(f.Label+":"))
 			lines = append(lines, f.Input.View())
 			lines = append(lines, "")

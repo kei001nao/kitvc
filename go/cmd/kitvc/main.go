@@ -8,7 +8,7 @@ import (
 	"kitvc/internal/db"
 	"kitvc/internal/ui"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func main() {
@@ -37,7 +37,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	p := tea.NewProgram(ui.InitialModel(cfg), tea.WithAltScreen())
+	p := tea.NewProgram(ui.InitialModel(cfg))
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Alas, there's been an error: %v", err)
 		os.Exit(1)

@@ -6,15 +6,45 @@ import (
 )
 
 var videoEditLabels = []string{
-	"Type", "Category", "SubCategory", "Series",
-	"Season", "Episode", "Title", "Date",
-	"Genres", "Synopsis",
+	"Type", "Category", "SubCategory", "Genres", "Title", "Series",
+	"Season", "Episode", "Date",
+	"Series Overview", "Synopsis", "Episode Overview",
 }
 
 var videoEditFieldNames = []string{
-	"type", "category", "subcategory", "series",
-	"season", "episode", "title", "air_date",
-	"genres", "synopsis",
+	"type", "category", "subcategory", "genres", "title", "series",
+	"season", "episode", "air_date",
+	"series_overview", "synopsis", "episode_overview",
+}
+
+var videoEditFieldKinds = []videoEditFieldKind{
+	videoFieldSelect, // Type
+	videoFieldInput,  // Category
+	videoFieldInput,  // SubCategory
+	videoFieldInput,  // Genres
+	videoFieldInput,  // Title
+	videoFieldInput,  // Series
+	videoFieldInput,  // Season
+	videoFieldInput,  // Episode
+	videoFieldInput,  // Date
+	videoFieldInput,  // Series Overview
+	videoFieldInput,  // Synopsis
+	videoFieldInput,  // Episode Overview
+}
+
+var videoEditOptions = [][]string{
+	videoTypeOptions,  // Type
+	nil,               // Category
+	nil,               // SubCategory
+	nil,               // Genres
+	nil,               // Title
+	nil,               // Series
+	nil,               // Season
+	nil,               // Episode
+	nil,               // Date
+	nil,               // Series Overview
+	nil,               // Synopsis
+	nil,               // Episode Overview
 }
 
 func videoEditInitialValues(v db.VideoData) []string {
@@ -22,13 +52,15 @@ func videoEditInitialValues(v db.VideoData) []string {
 		v.Type,
 		v.Category,
 		v.Subcategory,
+		v.Genres,
+		v.Title,
 		v.Series,
 		fmt.Sprintf("%d", v.Season),
 		fmt.Sprintf("%d", v.Episode),
-		v.Title,
 		v.AirDate,
-		"",
-		"",
+		v.SeriesOverview,
+		v.Synopsis,
+		v.EpisodeOverview,
 	}
 }
 

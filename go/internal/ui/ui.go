@@ -14,9 +14,9 @@ import (
 	"kitvc/internal/library"
 	"kitvc/internal/player"
 
-	"github.com/charmbracelet/bubbles/progress"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/progress"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type viewState int
@@ -110,6 +110,7 @@ type model struct {
 	editAlbumID       int64
 	editVideoFieldNames []string
 	editVideoPaths      []string
+	videoEdit           *videoEditModal
 	playingAlbumID    int64
 	currentFilterID   int64
 	currentFilterName string
@@ -132,7 +133,7 @@ func InitialModel(cfg *config.Config) model {
 	return model{
 		config:      cfg,
 		player:      p,
-		progress:    progress.New(progress.WithDefaultGradient()),
+		progress:    progress.New(progress.WithDefaultBlend()),
 		focusedSide: true,
 		activeView:  viewMusicLibrary,
 		sidebar: newSidebar(cfg.UI.SidebarWidth, 20),
@@ -361,10 +362,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.videoEdit != nil {
+		var cmd tea.Cmd
+		m.videoEdit, cmd = m.videoEdit.Update(msg)
+		if _, ok := msg.(tickMsg); ok {
+			cmd = tea.Batch(cmd, tick())
+		}
+		if m.videoEdit.cancelled {
+			m.videoEdit = nil
+			m.pendingAction = actionNone
+			m.editVideoFieldNames = nil
+			m.editVideoPaths = nil
+			return m, cmd
+		}
+		if m.videoEdit.submitted {
+			values := m.videoEdit.Values()
+			m = m.handleVideoEditSubmit(values)
+			m.videoEdit = nil
+			return m, cmd
+		}
+		return m, cmd
+	}
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if m.player != nil {
@@ -377,17 +400,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncFocus()
 			return m, nil
 		case "left":
-			if !m.focusedSide {
-				if m.player != nil {
-					m.player.Seek(-5)
-				}
+			if !m.focusedSide && m.player != nil && m.player.IsRunning() {
+				m.player.Seek(-5)
 				return m, nil
 			}
 		case "right":
-			if !m.focusedSide {
-				if m.player != nil {
-					m.player.Seek(5)
-				}
+			if !m.focusedSide && m.player != nil && m.player.IsRunning() {
+				m.player.Seek(5)
 				return m, nil
 			}
 		case "H":
@@ -431,20 +450,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			} else {
 				if m.activeView == viewMusicLibrary {
-					selected := m.trackList.table.SelectedRow()
-					if len(selected) > 0 {
+					selected := m.trackList.table.HighlightedRow()
+					if selected.Data != nil {
 						artist, album := m.getCurrentFilter()
 						tracks, _ := db.GetMusicTracks(artist, album)
-						
+
 						var paths []string
 						startIndex := -1
 						for i, t := range tracks {
 							paths = append(paths, t.Path)
-							if t.Title == selected[3] && t.Artist == selected[4] {
+							selTitle, _ := selected.Data[trackColTitle].(string)
+							selArtist, _ := selected.Data[trackColArtist].(string)
+							if t.Title == selTitle && t.Artist == selArtist {
 								startIndex = i
 							}
 						}
-						
+
 						if startIndex >= 0 {
 							m.player.PlayQueue(paths, startIndex)
 							t := tracks[startIndex]
@@ -454,19 +475,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, nil
 				} else if m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
-					selected := m.trackList.table.SelectedRow()
-					if len(selected) > 0 {
+					selected := m.trackList.table.HighlightedRow()
+					if selected.Data != nil {
 						tracks := m.trackList.tracks
-						
+
 						var paths []string
 						startIndex := -1
 						for i, t := range tracks {
 							paths = append(paths, t.Path)
-							if t.Title == selected[3] && t.Artist == selected[4] {
+							selTitle, _ := selected.Data[trackColTitle].(string)
+							selArtist, _ := selected.Data[trackColArtist].(string)
+							if t.Title == selTitle && t.Artist == selArtist {
 								startIndex = i
 							}
 						}
-						
+
 						if startIndex >= 0 {
 							m.player.PlayQueue(paths, startIndex)
 							t := tracks[startIndex]
@@ -510,34 +533,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 				} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
-					selected := m.videoList.table.SelectedRow()
-					if len(selected) > 0 {
-						videos := m.videoList.videos
-						
+					startIndex := m.videoList.table.GetHighlightedRowIndex()
+					videos := m.videoList.videos
+					if startIndex >= 0 && startIndex < len(videos) {
 						var paths []string
-						startIndex := -1
-						for i, v := range videos {
+						for _, v := range videos {
 							paths = append(paths, v.Path)
-							if v.Filename == selected[len(selected)-1] {
-								startIndex = i
-							}
 						}
-
-						if startIndex >= 0 {
-							m.player.SetProperty("vid", "auto")
-							if m.config.Video.Fullscreen {
-								m.player.SetProperty("fullscreen", "yes")
-							}
-							m.player.PlayQueue(paths, startIndex)
-							v := videos[startIndex]
-							m.currentTrack = v.Filename
-							m.duration = float64(v.Duration)
+						m.player.SetProperty("vid", "auto")
+						if m.config.Video.Fullscreen {
+							m.player.SetProperty("fullscreen", "yes")
 						}
+						m.player.PlayQueue(paths, startIndex)
+						v := videos[startIndex]
+						m.currentTrack = v.Filename
+						m.duration = float64(v.Duration)
 					}
 					return m, nil
 				}
 			}
-		case " ": // Play/Pause
+		case "space": // Play/Pause
 			if m.player != nil {
 				m.player.CyclePause()
 			}
@@ -554,11 +569,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.modal.SetSize(m.width, m.height)
 						}
 					} else {
-						selected := m.trackList.table.SelectedRow()
-						if len(selected) > 0 {
-							tracks, _ := db.GetMusicPlaylistTracks(m.currentPlaylistID)
-							for _, t := range tracks {
-								if t.Title == selected[3] && t.Artist == selected[4] {
+					selected := m.trackList.table.HighlightedRow()
+					if selected.Data != nil {
+						tracks, _ := db.GetMusicPlaylistTracks(m.currentPlaylistID)
+						for _, t := range tracks {
+							selTitle, _ := selected.Data[trackColTitle].(string)
+							selArtist, _ := selected.Data[trackColArtist].(string)
+							if t.Title == selTitle && t.Artist == selArtist {
 									m.pendingAction = actionRemoveTrack
 									m.pendingTracks = []string{t.Path}
 									m.modal = newConfirmModal("Remove this track from the playlist?")
@@ -611,11 +628,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.focusedSide && m.currentPlaylistID > 0 && m.activeView == viewMusicLibrary {
 				tracks, _ := db.GetMusicPlaylistTracks(m.currentPlaylistID)
 				if len(tracks) > 0 {
-					cursor := m.trackList.table.Cursor()
+					cursor := m.trackList.table.GetHighlightedRowIndex()
 					if cursor > 0 {
 						db.MoveMusicPlaylistTrack(m.currentPlaylistID, cursor, cursor-1)
 						m.refreshPlaylistTracks(m.currentPlaylistID)
-						m.trackList.table.SetCursor(cursor - 1)
+						m.trackList.table = m.trackList.table.WithHighlightedRow(cursor - 1)
 					}
 				}
 				return m, nil
@@ -624,11 +641,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.focusedSide && m.currentPlaylistID > 0 && m.activeView == viewMusicLibrary {
 				tracks, _ := db.GetMusicPlaylistTracks(m.currentPlaylistID)
 				if len(tracks) > 0 {
-					cursor := m.trackList.table.Cursor()
+					cursor := m.trackList.table.GetHighlightedRowIndex()
 					if cursor < len(tracks)-1 {
 						db.MoveMusicPlaylistTrack(m.currentPlaylistID, cursor, cursor+1)
 						m.refreshPlaylistTracks(m.currentPlaylistID)
-						m.trackList.table.SetCursor(cursor + 1)
+						m.trackList.table = m.trackList.table.WithHighlightedRow(cursor + 1)
 					}
 				}
 				return m, nil
@@ -654,12 +671,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						tracksToAdd = markedPaths
 						hasSelection = true
 					} else {
-						selected := m.trackList.table.SelectedRow()
-						if len(selected) > 0 {
+						selected := m.trackList.table.HighlightedRow()
+						if selected.Data != nil {
 							artist, album := m.getCurrentFilter()
 							tracks, _ := db.GetMusicTracks(artist, album)
 							for _, t := range tracks {
-								if t.Title == selected[3] && t.Artist == selected[4] {
+								selTitle, _ := selected.Data[trackColTitle].(string)
+								selArtist, _ := selected.Data[trackColArtist].(string)
+								if t.Title == selTitle && t.Artist == selArtist {
 									tracksToAdd = []string{t.Path}
 									hasSelection = true
 									break
@@ -673,10 +692,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						tracksToAdd = markedPaths
 						hasSelection = true
 					} else {
-						selected := m.trackList.table.SelectedRow()
-						if len(selected) > 0 {
+						selected := m.trackList.table.HighlightedRow()
+						if selected.Data != nil {
 							for _, t := range m.trackList.tracks {
-								if t.Title == selected[3] && t.Artist == selected[4] {
+								selTitle, _ := selected.Data[trackColTitle].(string)
+								selArtist, _ := selected.Data[trackColArtist].(string)
+								if t.Title == selTitle && t.Artist == selArtist {
 									tracksToAdd = []string{t.Path}
 									hasSelection = true
 									break
@@ -777,8 +798,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.filterEdit.SetSize(m.width, m.height)
 				}
 			} else if !m.focusedSide {
-				if m.activeView == viewMusicArtistDetail && m.artistDetail.focusedUpper {
-					cursor := m.artistDetail.albumsTable.Cursor()
+				videoViews := map[viewState]bool{
+					viewVideoLibrary: true, viewVideoContinue: true,
+					viewVideoRecent: true, viewVideoHealth: true, viewVideoFilter: true,
+				}
+				if videoViews[m.activeView] {
+					markedPaths := m.videoList.MarkedPaths()
+					if len(markedPaths) > 0 {
+						m.editVideoPaths = markedPaths
+						m.editVideoFieldNames = videoEditFieldNames
+						m.pendingAction = actionBatchEditVideo
+						initialValues := videoBatchEditInitialValues()
+						m.videoEdit = newVideoEditModal("Batch Edit", videoEditLabels, videoEditFieldKinds, initialValues, videoEditOptions)
+						m.videoEdit.SetSize(m.width, m.height)
+					} else {
+						cursor := m.videoList.table.GetHighlightedRowIndex()
+						if cursor >= 0 && cursor < len(m.videoList.videos) {
+							v := m.videoList.videos[cursor]
+							m.editVideoPaths = []string{v.Path}
+							m.editVideoFieldNames = videoEditFieldNames
+							m.pendingAction = actionEditVideo
+							initialValues := videoEditInitialValues(v)
+							m.videoEdit = newVideoEditModal(v.Filename, videoEditLabels, videoEditFieldKinds, initialValues, videoEditOptions)
+							m.videoEdit.SetThumbnail(v.ThumbnailPath)
+							m.videoEdit.SetSize(m.width, m.height)
+						}
+					}
+				} else if m.activeView == viewMusicArtistDetail && m.artistDetail.focusedUpper {
+					cursor := m.artistDetail.albumsTable.GetHighlightedRowIndex()
 					if cursor < 0 || cursor >= len(m.artistDetail.albums) {
 						return m, nil
 					}
@@ -818,7 +865,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								}
 							}
 						} else {
-							cursor := m.trackList.table.Cursor()
+							cursor := m.trackList.table.GetHighlightedRowIndex()
 							if cursor >= 0 && cursor < len(m.trackList.tracks) {
 								selectedTracks = []db.TrackData{m.trackList.tracks[cursor]}
 							}
@@ -841,7 +888,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 						}
 					} else if m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
-						cursor := m.trackList.table.Cursor()
+						cursor := m.trackList.table.GetHighlightedRowIndex()
 						if cursor >= 0 && cursor < len(m.trackList.tracks) {
 							selectedTracks = []db.TrackData{m.trackList.tracks[cursor]}
 						}
@@ -891,40 +938,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.modal.SetSize(m.width, m.height)
 					}
 				}
-
-				videoViews := map[viewState]bool{
-					viewVideoLibrary: true, viewVideoContinue: true,
-					viewVideoRecent: true, viewVideoHealth: true, viewVideoFilter: true,
-				}
-				if videoViews[m.activeView] {
-					markedPaths := m.videoList.MarkedPaths()
-					if len(markedPaths) > 0 {
-						m.editVideoPaths = markedPaths
-						m.editVideoFieldNames = videoEditFieldNames
-						m.pendingAction = actionBatchEditVideo
-						initialValues := videoBatchEditInitialValues()
-						m.modal = newFormModal("Batch Edit Video", videoEditLabels, initialValues, "Tab/Shift+Tab: navigate  Enter: Save  Esc: Cancel")
-						m.modal.SetSize(m.width, m.height)
-					} else {
-						cursor := m.videoList.table.Cursor()
-						if cursor >= 0 && cursor < len(m.videoList.videos) {
-							v := m.videoList.videos[cursor]
-							m.editVideoPaths = []string{v.Path}
-							m.editVideoFieldNames = videoEditFieldNames
-							m.pendingAction = actionEditVideo
-							initialValues := videoEditInitialValues(v)
-							m.modal = newFormModal("Edit Video", videoEditLabels, initialValues, "Tab/Shift+Tab: navigate  Enter: Save  Esc: Cancel")
-							m.modal.SetSize(m.width, m.height)
-						}
-					}
-				}
 			}
 			return m, nil
 		case "m":
 			if !m.focusedSide {
 				if m.activeView == viewMusicLibrary || m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
-					rows := m.trackList.table.Rows()
-					cursor := m.trackList.table.Cursor()
+					rows := m.trackList.table.GetVisibleRows()
+					cursor := m.trackList.table.GetHighlightedRowIndex()
 					if cursor < len(rows) {
 						m.trackList.marked[cursor] = !m.trackList.marked[cursor]
 						currentPath := ""
@@ -941,11 +961,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if newCursor >= len(rows) {
 							newCursor = 0
 						}
-						m.trackList.table.SetCursor(newCursor)
+						m.trackList.table = m.trackList.table.WithHighlightedRow(newCursor)
 					}
 				} else if m.activeView == viewMusicArtistDetail && !m.artistDetail.focusedUpper {
-					rows := m.artistDetail.tracksTable.Rows()
-					cursor := m.artistDetail.tracksTable.Cursor()
+					rows := m.artistDetail.tracksTable.GetVisibleRows()
+					cursor := m.artistDetail.tracksTable.GetHighlightedRowIndex()
 					if cursor < len(rows) {
 						m.artistDetail.marked[cursor] = !m.artistDetail.marked[cursor]
 						currentPath := ""
@@ -962,11 +982,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if newCursor >= len(rows) {
 							newCursor = 0
 						}
-						m.artistDetail.tracksTable.SetCursor(newCursor)
+						m.artistDetail.tracksTable = m.artistDetail.tracksTable.WithHighlightedRow(newCursor)
 					}
 		} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
-					rows := m.videoList.table.Rows()
-					cursor := m.videoList.table.Cursor()
+					rows := m.videoList.table.GetVisibleRows()
+					cursor := m.videoList.table.GetHighlightedRowIndex()
 					if cursor < len(rows) {
 						m.videoList.marked[cursor] = !m.videoList.marked[cursor]
 						currentPath := ""
@@ -983,7 +1003,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if newCursor >= len(rows) {
 							newCursor = 0
 						}
-						m.videoList.table.SetCursor(newCursor)
+						m.videoList.table = m.videoList.table.WithHighlightedRow(newCursor)
 					}
 				}
 			}
@@ -992,7 +1012,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.progress.Width = m.width - 20
+		m.progress.SetWidth(m.width - 20)
 
 		sbWidth := m.getSidebarWidth()
 		m.sidebar.SetSize(sbWidth, m.height-8)
@@ -1501,16 +1521,16 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 			m.refreshTrackList(artist, album)
 		} else if m.activeView == viewMusicArtistDetail {
 			sbWidth := m.getSidebarWidth()
-			albumCursor := m.artistDetail.albumsTable.Cursor()
-			trackCursor := m.artistDetail.tracksTable.Cursor()
+			albumCursor := m.artistDetail.albumsTable.GetHighlightedRowIndex()
+			trackCursor := m.artistDetail.tracksTable.GetHighlightedRowIndex()
 			wasFocusedUpper := m.artistDetail.focusedUpper
 			wasFocused := m.focusedSide
 			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-1, m.height-8, m.artistDetail.artist, m.artistDetail.albums)
 			if albumCursor >= 0 && albumCursor < len(m.artistDetail.albums) {
-				m.artistDetail.albumsTable.SetCursor(albumCursor)
+				m.artistDetail.albumsTable = m.artistDetail.albumsTable.WithHighlightedRow(albumCursor)
 				m.artistDetail.loadTracksForAlbum(m.artistDetail.albums[albumCursor].Title)
 				if trackCursor >= 0 && trackCursor < len(m.artistDetail.tracks) {
-					m.artistDetail.tracksTable.SetCursor(trackCursor)
+					m.artistDetail.tracksTable = m.artistDetail.tracksTable.WithHighlightedRow(trackCursor)
 				}
 			}
 			m.artistDetail.focusedUpper = wasFocusedUpper
@@ -1592,16 +1612,16 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		if n := m.sidebar.SelectedNode(); n != nil {
 			// Preserve artist detail cursor positions if we're in artist detail view
 			if m.activeView == viewMusicArtistDetail {
-				savedAlbumCursor := m.artistDetail.albumsTable.Cursor()
-				savedTrackCursor := m.artistDetail.tracksTable.Cursor()
+				savedAlbumCursor := m.artistDetail.albumsTable.GetHighlightedRowIndex()
+				savedTrackCursor := m.artistDetail.tracksTable.GetHighlightedRowIndex()
 				savedFocusedUpper := m.artistDetail.focusedUpper
 				m.handleSidebarChange(n)
 				if m.activeView == viewMusicArtistDetail {
 					if savedAlbumCursor >= 0 && savedAlbumCursor < len(m.artistDetail.albums) {
-						m.artistDetail.albumsTable.SetCursor(savedAlbumCursor)
+						m.artistDetail.albumsTable = m.artistDetail.albumsTable.WithHighlightedRow(savedAlbumCursor)
 						m.artistDetail.loadTracksForAlbum(m.artistDetail.albums[savedAlbumCursor].Title)
 						if savedTrackCursor >= 0 && savedTrackCursor < len(m.artistDetail.tracks) {
-							m.artistDetail.tracksTable.SetCursor(savedTrackCursor)
+							m.artistDetail.tracksTable = m.artistDetail.tracksTable.WithHighlightedRow(savedTrackCursor)
 						}
 					}
 					m.artistDetail.focusedUpper = savedFocusedUpper
@@ -1665,6 +1685,35 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		m.refreshCurrentVideoView()
 	}
 
+	return m
+}
+
+func (m model) handleVideoEditSubmit(values []string) model {
+	for i, field := range m.editVideoFieldNames {
+		if i >= len(values) {
+			break
+		}
+		val := values[i]
+		if val == "" {
+			continue
+		}
+
+		for _, path := range m.editVideoPaths {
+			if err := db.UpdateVideoField(path, field, val); err != nil {
+				log.Printf("Failed to update video %s: %v", path, err)
+			}
+		}
+	}
+
+	if len(m.editVideoPaths) > 0 {
+		m.message = fmt.Sprintf("Updated %d video(s)", len(m.editVideoPaths))
+	} else {
+		m.message = "No changes"
+	}
+	m.pendingAction = actionNone
+	m.editVideoFieldNames = nil
+	m.editVideoPaths = nil
+	m.refreshCurrentVideoView()
 	return m
 }
 
@@ -1868,9 +1917,11 @@ func formatDuration(seconds int) string {
 	return fmt.Sprintf("%02d:%02d", mins, secs)
 }
 
-func (m model) View() string {
+func (m model) View() tea.View {
 	if m.width == 0 || m.height == 0 {
-		return "Loading..."
+		v := tea.NewView("Loading...")
+		v.AltScreen = true
+		return v
 	}
 
 	header := m.renderHeader()
@@ -2012,6 +2063,49 @@ func (m model) View() string {
 		)
 	}
 
+	// Render video edit modal
+	if m.videoEdit != nil {
+		m.videoEdit.SetSize(m.width, m.height)
+		overlay := m.videoEdit.View()
+		contentArea := lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr))
+		contentLines := strings.Split(contentArea, "\n")
+		dialogLines := strings.Split(overlay, "\n")
+
+		for len(dialogLines) > 0 && dialogLines[len(dialogLines)-1] == "" {
+			dialogLines = dialogLines[:len(dialogLines)-1]
+		}
+
+		dialogH := len(dialogLines)
+		if dialogH > 0 {
+			startRow := (len(contentLines) - dialogH) / 2
+			if startRow < 0 {
+				startRow = 0
+			}
+
+			dialogW := 0
+			for _, line := range dialogLines {
+				if w := lipgloss.Width(line); w > dialogW {
+					dialogW = w
+				}
+			}
+			leftPad := (m.width - dialogW) / 2
+			if leftPad < 0 {
+				leftPad = 0
+			}
+			padStr := strings.Repeat(" ", leftPad)
+
+			for i := 0; i < dialogH && startRow+i < len(contentLines); i++ {
+				contentLines[startRow+i] = padStr + dialogLines[i]
+			}
+		}
+
+		mainView = lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			strings.Join(contentLines, "\n"),
+			footer,
+		)
+	}
+
 	// Render nested modals
 	if m.filterCondEdit != nil {
 		m.filterCondEdit.SetSize(m.width, m.height)
@@ -2097,7 +2191,9 @@ func (m model) View() string {
 		)
 	}
 
-	return mainView + "\x1b[?25l"
+	v := tea.NewView(mainView + "\x1b[?25l")
+	v.AltScreen = true
+	return v
 }
 
 func (m model) renderHeader() string {

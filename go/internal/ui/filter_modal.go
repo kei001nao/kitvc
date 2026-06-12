@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type filterField struct {
@@ -108,7 +108,7 @@ func newFilterEditModal(name string, conditionsJSON, sortJSON string, filterFiel
 	ti.Placeholder = "Enter view name..."
 	ti.Focus()
 	ti.CharLimit = 100
-	ti.Width = 40
+	ti.SetWidth(40)
 
 	return &filterEditModal{
 		nameInput:    ti,
@@ -384,7 +384,7 @@ func newFilterConditionModal(fieldIdx, opIdx int, value string, filterFields []f
 	ti.SetValue(value)
 	ti.Blur() // Start blurred, focus only when on value section
 	ti.CharLimit = 100
-	ti.Width = 30
+	ti.SetWidth(30)
 
 	return &filterConditionModal{
 		fields:         filterFields,

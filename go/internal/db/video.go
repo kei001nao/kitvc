@@ -7,20 +7,25 @@ import (
 )
 
 type VideoData struct {
-	Path        string
-	Filename    string
-	Size        int64
-	Duration    int
-	Year        int
-	MTime       float64
-	Type        string
-	Category    string
-	Subcategory string
-	Series      string
-	Season      int
-	Episode     int
-	Title       string
-	AirDate     string
+	Path            string
+	Filename        string
+	Size            int64
+	Duration        int
+	Year            int
+	MTime           float64
+	Type            string
+	Category        string
+	Subcategory     string
+	Series          string
+	Season          int
+	Episode         int
+	Title           string
+	AirDate         string
+	Genres          string
+	Synopsis        string
+	SeriesOverview  string
+	EpisodeOverview string
+	ThumbnailPath   string
 }
 
 type VideoFilter struct {
@@ -108,7 +113,10 @@ func GetVideos() ([]VideoData, error) {
 			path, filename, size, duration, year, mtime,
 			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
 			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
-			COALESCE(title, ''), COALESCE(air_date, '')
+			COALESCE(title, ''), COALESCE(air_date, ''),
+			COALESCE(genres, ''), COALESCE(synopsis, ''),
+			COALESCE(series_overview, ''), COALESCE(episode_overview, ''),
+			COALESCE(thumbnail_path, '')
 		FROM video_files
 		ORDER BY series, season, episode, filename
 	`)
@@ -124,6 +132,8 @@ func GetVideos() ([]VideoData, error) {
 			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
 			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
 			&v.Title, &v.AirDate,
+			&v.Genres, &v.Synopsis, &v.SeriesOverview, &v.EpisodeOverview,
+			&v.ThumbnailPath,
 		)
 		if err != nil {
 			return nil, err
@@ -162,7 +172,10 @@ func GetVideoPlaylistFiles(playlistID int64) ([]VideoData, error) {
 			v.path, v.filename, v.size, v.duration, v.year, v.mtime,
 			COALESCE(v.type, ''), COALESCE(v.category, ''), COALESCE(v.subcategory, ''),
 			COALESCE(v.series, ''), COALESCE(v.season, 0), COALESCE(v.episode, 0), 
-			COALESCE(v.title, ''), COALESCE(v.air_date, '')
+			COALESCE(v.title, ''), COALESCE(v.air_date, ''),
+			COALESCE(v.genres, ''), COALESCE(v.synopsis, ''),
+			COALESCE(v.series_overview, ''), COALESCE(v.episode_overview, ''),
+			COALESCE(v.thumbnail_path, '')
 		FROM video_files v
 		JOIN video_playlist_files vpf ON v.path = vpf.file_path
 		WHERE vpf.playlist_id = ?
@@ -180,6 +193,8 @@ func GetVideoPlaylistFiles(playlistID int64) ([]VideoData, error) {
 			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
 			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
 			&v.Title, &v.AirDate,
+			&v.Genres, &v.Synopsis, &v.SeriesOverview, &v.EpisodeOverview,
+			&v.ThumbnailPath,
 		)
 		if err != nil {
 			return nil, err
@@ -254,7 +269,10 @@ func GetFilteredVideos(conditionsJSON, sortJSON string) ([]VideoData, error) {
 			path, filename, size, duration, year, mtime,
 			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
 			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
-			COALESCE(title, ''), COALESCE(air_date, '')
+			COALESCE(title, ''), COALESCE(air_date, ''),
+			COALESCE(genres, ''), COALESCE(synopsis, ''),
+			COALESCE(series_overview, ''), COALESCE(episode_overview, ''),
+			COALESCE(thumbnail_path, '')
 		FROM video_files`
 	if whereClause != "" {
 		query += " WHERE " + whereClause
@@ -298,6 +316,8 @@ func GetFilteredVideos(conditionsJSON, sortJSON string) ([]VideoData, error) {
 			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
 			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
 			&v.Title, &v.AirDate,
+			&v.Genres, &v.Synopsis, &v.SeriesOverview, &v.EpisodeOverview,
+			&v.ThumbnailPath,
 		)
 		if err != nil {
 			return nil, err
@@ -349,7 +369,10 @@ func GetContinueWatchingVideos() ([]VideoData, error) {
 			path, filename, size, duration, year, mtime,
 			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
 			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
-			COALESCE(title, ''), COALESCE(air_date, '')
+			COALESCE(title, ''), COALESCE(air_date, ''),
+			COALESCE(genres, ''), COALESCE(synopsis, ''),
+			COALESCE(series_overview, ''), COALESCE(episode_overview, ''),
+			COALESCE(thumbnail_path, '')
 		FROM video_files
 		WHERE last_pos > 0
 		ORDER BY last_played_at DESC
@@ -366,6 +389,8 @@ func GetContinueWatchingVideos() ([]VideoData, error) {
 			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
 			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
 			&v.Title, &v.AirDate,
+			&v.Genres, &v.Synopsis, &v.SeriesOverview, &v.EpisodeOverview,
+			&v.ThumbnailPath,
 		)
 		if err != nil {
 			return nil, err
@@ -381,7 +406,10 @@ func GetRecentlyAddedVideos() ([]VideoData, error) {
 			path, filename, size, duration, year, mtime,
 			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
 			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
-			COALESCE(title, ''), COALESCE(air_date, '')
+			COALESCE(title, ''), COALESCE(air_date, ''),
+			COALESCE(genres, ''), COALESCE(synopsis, ''),
+			COALESCE(series_overview, ''), COALESCE(episode_overview, ''),
+			COALESCE(thumbnail_path, '')
 		FROM video_files
 		ORDER BY created_at DESC
 	`)
@@ -397,6 +425,8 @@ func GetRecentlyAddedVideos() ([]VideoData, error) {
 			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
 			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
 			&v.Title, &v.AirDate,
+			&v.Genres, &v.Synopsis, &v.SeriesOverview, &v.EpisodeOverview,
+			&v.ThumbnailPath,
 		)
 		if err != nil {
 			return nil, err
@@ -412,7 +442,10 @@ func GetUnhealthyVideos() ([]VideoData, error) {
 			path, filename, size, duration, year, mtime,
 			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
 			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
-			COALESCE(title, ''), COALESCE(air_date, '')
+			COALESCE(title, ''), COALESCE(air_date, ''),
+			COALESCE(genres, ''), COALESCE(synopsis, ''),
+			COALESCE(series_overview, ''), COALESCE(episode_overview, ''),
+			COALESCE(thumbnail_path, '')
 		FROM video_files
 		WHERE synopsis IS NULL OR year IS NULL
 		ORDER BY category, series, season, episode, title
@@ -429,6 +462,8 @@ func GetUnhealthyVideos() ([]VideoData, error) {
 			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
 			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
 			&v.Title, &v.AirDate,
+			&v.Genres, &v.Synopsis, &v.SeriesOverview, &v.EpisodeOverview,
+			&v.ThumbnailPath,
 		)
 		if err != nil {
 			return nil, err
