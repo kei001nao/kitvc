@@ -632,21 +632,33 @@ func (m *videoFetchModal) renderPosterBlock() string {
 func (m *videoFetchModal) PosterPath() string       { return m.posterPath }
 func (m *videoFetchModal) PosterRows() int           { return m.posterRows }
 func (m *videoFetchModal) PosterCols() int           { return m.posterCols }
+
 func (m *videoFetchModal) Width() int                { return m.width }
 func (m *videoFetchModal) Height() int               { return m.height }
 func (m *videoFetchModal) OverlayStartLine() int     { return m.overlayStartLine }
 func (m *videoFetchModal) OverlayStartCol() int      { return m.overlayStartCol }
 func (m *videoFetchModal) SetOverlayPos(sl, sc int)  { m.overlayStartLine = sl; m.overlayStartCol = sc }
 
+func (m *videoFetchModal) HeaderHeight() int {
+	h := 1 // "TMDB Search"
+	h += 1 // Spacer
+	h += 1 // "Search Query:" label
+	h += 1 // Input view
+	h += 1 // Spacer
+	h += 1 // "Media Type:" line
+	h += 1 // Spacer
+	return h
+}
+
 func (m *videoFetchModal) PosterRow() int {
-	return 9
+	return m.HeaderHeight()
 }
 
 func (m *videoFetchModal) View() string {
 	var header strings.Builder
 	// Header
 	header.WriteString(lipgloss.NewStyle().Bold(true).Render("TMDB Search") + "\n\n")
-	
+
 	// Query Input
 	queryStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	if m.focus == focusQuery {
@@ -654,7 +666,7 @@ func (m *videoFetchModal) View() string {
 	}
 	header.WriteString(queryStyle.Render("Search Query:") + "\n")
 	header.WriteString(m.queryInput.View() + "\n\n")
-	
+
 	// Type Selection
 	typeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	if m.focus == focusType {
@@ -683,10 +695,11 @@ func (m *videoFetchModal) View() string {
 	}
 	footerView := footer.String()
 
-	// Adjust table heights based on available space
-	headerH := lipgloss.Height(headerView)
+	headerH := m.HeaderHeight()
 	footerH := lipgloss.Height(footerView)
-	tableH := m.height - 10 - headerH - footerH
+	
+	// Available height for tables
+	tableH := m.height - 2 - headerH - footerH - 1
 	if tableH < 5 {
 		tableH = 5
 	}
@@ -733,7 +746,6 @@ func (m *videoFetchModal) View() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		headerView,
 		body,
-		"\n",
 		footerView,
 	)
 

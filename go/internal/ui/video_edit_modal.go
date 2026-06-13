@@ -23,6 +23,12 @@ type videoEditModal struct {
 	thumbnailWidth  int
 	thumbnailHeight int
 	filename        string
+
+	posterPath       string
+	posterCols       int
+	posterRows       int
+	overlayStartLine int
+	overlayStartCol  int
 }
 
 type videoEditFieldKind int
@@ -106,12 +112,53 @@ func newVideoEditModal(filename string, labels []string, fieldKinds []videoEditF
 		thumbnailWidth:  12,
 		thumbnailHeight: 6,
 		filename:        filename,
+		posterCols:      12,
+		posterRows:      8,
+	}
+	if len(initialValues) > 12 {
+		m.posterPath = initialValues[12]
 	}
 	return m
 }
 
 func (m *videoEditModal) SetThumbnail(path string) {
 	m.thumbnailPath = path
+}
+
+func (m *videoEditModal) SetPosterPath(path string) { m.posterPath = path }
+
+func (m *videoEditModal) SetFieldValue(index int, value string) {
+	if index >= 0 && index < len(m.fields) && m.fields[index].Kind == videoFieldInput {
+		m.fields[index].Input.SetValue(value)
+	}
+}
+func (m *videoEditModal) PosterPath() string        { return m.posterPath }
+func (m *videoEditModal) PosterCols() int           { return m.posterCols }
+func (m *videoEditModal) PosterRows() int           { return m.posterRows }
+func (m *videoEditModal) SetOverlayPos(sl, sc int)  { m.overlayStartLine = sl; m.overlayStartCol = sc }
+func (m *videoEditModal) OverlayStartLine() int     { return m.overlayStartLine }
+func (m *videoEditModal) OverlayStartCol() int      { return m.overlayStartCol }
+func (m *videoEditModal) Width() int                { return m.width }
+
+func (m *videoEditModal) HeaderHeight() int {
+	dialogW := m.width - 4
+	if dialogW < 40 {
+		dialogW = 40
+	}
+	if dialogW > 80 {
+		dialogW = 80
+	}
+	h := 1 // "Edit Video"
+	if m.filename != "" {
+		name := m.filename
+		maxLen := dialogW - 4
+		if maxLen < 20 {
+			maxLen = 20
+		}
+		h += (len(name) + maxLen - 1) / maxLen
+	}
+	h += 1 // Spacer
+	return h
 }
 
 func (m *videoEditModal) Update(msg tea.Msg) (*videoEditModal, tea.Cmd) {
@@ -131,7 +178,10 @@ func (m *videoEditModal) Update(msg tea.Msg) (*videoEditModal, tea.Cmd) {
 		case "tab", "down":
 			m.nextField()
 			return m, nil
-		case "shift+tab", "up":
+		case "up": // up/down only for fields, shift+tab also for backward
+			m.prevField()
+			return m, nil
+		case "shift+tab":
 			m.prevField()
 			return m, nil
 		case "pgup":
@@ -187,9 +237,9 @@ func (m *videoEditModal) scrollToFocused() {
 	if vpH < 1 {
 		vpH = 1
 	}
-	
+
 	fieldH := 1 + m.fields[m.focusIndex].Height
-	
+
 	if y < m.viewport.YOffset() {
 		m.viewport.SetYOffset(y)
 	} else if y+fieldH > m.viewport.YOffset()+vpH {
@@ -237,37 +287,36 @@ func (m *videoEditModal) SetSize(w, h int) {
 	m.width = w
 	m.height = h
 	m.viewport.SetWidth(w - 6)
-	m.viewport.SetHeight(h - 6)
+	// Viewport height will be set in View() based on other elements
 }
 
-func (m *videoEditModal) renderThumbnail() string {
-	w := m.thumbnailWidth
-	h := m.thumbnailHeight
-
-	boxStyle := lipgloss.NewStyle().
-		Width(w).
-		Height(h).
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		Align(lipgloss.Center, lipgloss.Center)
-
-	if m.thumbnailPath == "" {
-		return boxStyle.Render(lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")).
-			Render("[No Thumb]"))
+func (m *videoEditModal) renderPosterBlock() string {
+	dialogW := m.width - 4
+	if dialogW < 40 {
+		dialogW = 40
+	}
+	if dialogW > 80 {
+		dialogW = 80
 	}
 
-	name := m.thumbnailPath
-	if idx := strings.LastIndex(name, "/"); idx >= 0 {
-		name = name[idx+1:]
+	var sb strings.Builder
+	centerLine := m.posterRows / 2
+	for i := 0; i < m.posterRows; i++ {
+		line := strings.Repeat(" ", dialogW)
+		if m.posterPath == "" && i == centerLine {
+			noPoster := "[No Poster]"
+			pad := (dialogW - lipgloss.Width(noPoster)) / 2
+			if pad < 0 {
+				pad = 0
+			}
+			line = strings.Repeat(" ", pad) + noPoster + strings.Repeat(" ", dialogW-pad-lipgloss.Width(noPoster))
+		}
+		sb.WriteString(line)
+		if i < m.posterRows-1 {
+			sb.WriteString("\n")
+		}
 	}
-	if len(name) > w-4 {
-		name = name[:w-4]
-	}
-
-	return boxStyle.Render(lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Render(name))
+	return sb.String()
 }
 
 func (m *videoEditModal) View() string {
@@ -278,11 +327,8 @@ func (m *videoEditModal) View() string {
 	if dialogW > 80 {
 		dialogW = 80
 	}
-	thumbAreaW := m.thumbnailWidth + 2
-	fieldsW := dialogW - thumbAreaW - 4
-	if fieldsW < 20 {
-		fieldsW = 20
-	}
+	
+	headerH := m.HeaderHeight()
 
 	var headerLines []string
 	headerLines = append(headerLines, lipgloss.NewStyle().Bold(true).Render("Edit Video"))
@@ -292,11 +338,16 @@ func (m *videoEditModal) View() string {
 		if maxLen < 20 {
 			maxLen = 20
 		}
-		if len(name) > maxLen {
-			headerLines = append(headerLines, lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(name[:maxLen]))
-			headerLines = append(headerLines, lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(name[maxLen:]))
-		} else {
-			headerLines = append(headerLines, lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(name))
+		// Wrap name if too long
+		for len(name) > 0 {
+			chunk := name
+			if len(chunk) > maxLen {
+				chunk = name[:maxLen]
+				name = name[maxLen:]
+			} else {
+				name = ""
+			}
+			headerLines = append(headerLines, lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(chunk))
 		}
 	}
 	headerLines = append(headerLines, "")
@@ -309,17 +360,19 @@ func (m *videoEditModal) View() string {
 	footerLines = append(footerLines, tmdbBtn+"  "+footerKeys)
 	footerView := strings.Join(footerLines, "\n")
 
-	// Fixed header and footer height
-	headerH := lipgloss.Height(headerView)
 	footerH := lipgloss.Height(footerView)
-	vpH := m.height - 10 - headerH - footerH // Subtract padding and border
+
+	fieldsW := dialogW - 4
+	if fieldsW < 20 {
+		fieldsW = 20
+	}
+
+	// Calculate viewport height: Total height - borders(2) - padding(0) - header - poster - footer - spacers(2)
+	vpH := m.height - 2 - headerH - m.posterRows - footerH - 2
 	if vpH < 5 {
 		vpH = 5
 	}
 	m.viewport.SetHeight(vpH)
-
-	thumbBlock := m.renderThumbnail()
-	thumbLines := strings.Split(thumbBlock, "\n")
 
 	var fieldLines []string
 	for i, f := range m.fields {
@@ -333,24 +386,11 @@ func (m *videoEditModal) View() string {
 		switch f.Kind {
 		case videoFieldInput:
 			f.Input.SetWidth(fieldsW - 2)
-			if f.Height > 1 {
-				// For multi-line, we just show the start of the value or multiple lines if we had a TextArea
-				// Since textinput.Model is single-line, we'll just show the value but allocate space
-				val := f.Input.View()
-				fieldLines = append(fieldLines, val)
-				// Add extra empty lines for the allocated height
-				for h := 1; h < f.Height; h++ {
-					fieldLines = append(fieldLines, "")
-				}
-			} else {
-				fieldLines = append(fieldLines, f.Input.View())
-			}
+			fieldLines = append(fieldLines, f.Input.View())
 		case videoFieldTextArea:
 			f.TextArea.SetWidth(fieldsW - 2)
 			f.TextArea.SetHeight(f.Height)
-			taView := f.TextArea.View()
-			lines := strings.Split(taView, "\n")
-			fieldLines = append(fieldLines, lines...)
+			fieldLines = append(fieldLines, f.TextArea.View())
 		case videoFieldSelect:
 			var opts []string
 			for j, opt := range f.Options {
@@ -365,32 +405,13 @@ func (m *videoEditModal) View() string {
 		fieldLines = append(fieldLines, "")
 	}
 
-	maxLines := len(fieldLines)
-	if len(thumbLines) > maxLines {
-		maxLines = len(thumbLines)
-	}
+	m.viewport.SetContent(strings.Join(fieldLines, "\n"))
 
-	var combinedLines []string
-	for i := 0; i < maxLines; i++ {
-		left := ""
-		if i < len(thumbLines) {
-			left = thumbLines[i]
-		}
-		leftPad := thumbAreaW - lipgloss.Width(left)
-		if leftPad < 0 {
-			leftPad = 0
-		}
-		right := ""
-		if i < len(fieldLines) {
-			right = fieldLines[i]
-		}
-		combinedLines = append(combinedLines, left+strings.Repeat(" ", leftPad)+right)
-	}
+	posterBlock := m.renderPosterBlock()
 
-	m.viewport.SetContent(strings.Join(combinedLines, "\n"))
-	
 	mainView := lipgloss.JoinVertical(lipgloss.Left,
 		headerView,
+		posterBlock,
 		m.viewport.View(),
 		footerView,
 	)

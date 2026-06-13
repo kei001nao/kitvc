@@ -126,6 +126,11 @@ type model struct {
 	posterDisplayedPath string
 	lastPosterRow       int
 	lastPosterCol       int
+
+	videoEditLastPosterRow int
+	videoEditLastPosterCol int
+	videoEditLastPosterPath string
+	videoEditPosterDisplayed bool
 }
 
 func InitialModel(cfg *config.Config) model {
@@ -138,14 +143,17 @@ func InitialModel(cfg *config.Config) model {
 	}
 
 	return model{
-		config:         cfg,
-		player:         p,
-		progress:       progress.New(progress.WithDefaultBlend()),
-		focusedSide:    true,
-		activeView:     viewMusicLibrary,
-		sidebar:        newSidebar(cfg.UI.SidebarWidth, 20),
-		lastPosterRow:  -1,
-		lastPosterCol:  -1,
+		config:                   cfg,
+		player:                   p,
+		progress:                 progress.New(progress.WithDefaultBlend()),
+		focusedSide:              true,
+		activeView:               viewMusicLibrary,
+		sidebar:                  newSidebar(cfg.UI.SidebarWidth, 20),
+		lastPosterRow:            -1,
+		lastPosterCol:            -1,
+		videoEditLastPosterRow:   -1,
+		videoEditLastPosterCol:   -1,
+		videoEditPosterDisplayed: false,
 	}
 }
 
@@ -401,9 +409,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Trigger chafa poster display if poster is ready and not yet displayed
 		var posterCmd tea.Cmd
-		if path := m.videoFetch.PosterPath(); path != "" && path != m.posterDisplayedPath {
-			m.posterDisplayedPath = path
-			posterCmd = m.posterDisplayCmd()
+		if path := m.videoFetch.PosterPath(); path != "" {
+			row, col, _, _ := m.posterPos()
+			if path != m.posterDisplayedPath || row != m.lastPosterRow || col != m.lastPosterCol {
+				m.posterDisplayedPath = path
+				posterCmd = m.posterDisplayCmd()
+			}
+		} else if m.posterDisplayedPath != "" {
+			m.posterDisplayedPath = ""
 		}
 		return m, tea.Batch(cmd, posterCmd)
 	}
@@ -415,20 +428,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = tea.Batch(cmd, tick())
 		}
 		if m.videoEdit.cancelled {
+			clearCmd := m.videoEditPosterClearCmd()
 			m.videoEdit = nil
 			m.pendingAction = actionNone
 			m.editVideoFieldNames = nil
 			m.editVideoPaths = nil
-			return m, cmd
+			m.videoEditPosterDisplayed = false
+			return m, tea.Batch(cmd, clearCmd)
 		}
 		if m.videoEdit.submitted {
+			clearCmd := m.videoEditPosterClearCmd()
 			values := m.videoEdit.Values()
 			m = m.handleVideoEditSubmit(values)
 			m.videoEdit = nil
-			return m, cmd
+			m.videoEditPosterDisplayed = false
+			return m, tea.Batch(cmd, clearCmd)
 		}
+
 		if m.videoEdit.searchTMDB {
 			m.videoEdit.searchTMDB = false
+			clearCmd := m.videoEditPosterClearCmd()
 			query := ""
 			isTV := false
 			initialSeason := 0
@@ -456,14 +475,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if apiKey == "" {
 				m.message = "TMDB API Key not set in config.toml or TMDB_API_KEY env"
-				return m, cmd
+				return m, tea.Batch(cmd, clearCmd)
 			}
 
 			m.videoFetch = newVideoFetchModal(apiKey, query, isTV, initialSeason, initialEpisode)
 			m.videoFetch.SetSize(m.width, m.height-10)
-			return m, cmd
+			m.videoEditPosterDisplayed = false
+			return m, tea.Batch(cmd, clearCmd)
 		}
-		return m, cmd
+
+		// Trigger chafa poster display if poster is ready and overlay position is set
+		var posterCmd tea.Cmd
+		if path := m.videoEdit.PosterPath(); path != "" {
+			sl := m.videoEdit.OverlayStartLine()
+			if sl >= 0 {
+				row, col, _, _ := m.videoEditPosterPos()
+				needsDisplay := !m.videoEditPosterDisplayed
+				needsDisplay = needsDisplay || row != m.videoEditLastPosterRow || col != m.videoEditLastPosterCol
+				needsDisplay = needsDisplay || path != m.videoEditLastPosterPath
+				if needsDisplay {
+					posterCmd = m.videoEditPosterDisplayCmd()
+					m.videoEditPosterDisplayed = true
+					m.videoEditLastPosterPath = path
+				}
+			}
+		} else {
+			m.videoEditPosterDisplayed = false
+			m.videoEditLastPosterPath = ""
+		}
+		return m, tea.Batch(cmd, posterCmd)
 	}
 
 	var cmds []tea.Cmd
@@ -471,7 +511,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tmdbMetadataMsg:
 		m.applyTMDBMetadata(msg.metadata)
-		return m, nil
+		var posterCmd tea.Cmd
+		if m.videoEdit != nil {
+			if path := m.videoEdit.PosterPath(); path != "" {
+				sl := m.videoEdit.OverlayStartLine()
+				if sl >= 0 {
+					row, col, _, _ := m.videoEditPosterPos()
+					needsDisplay := !m.videoEditPosterDisplayed
+					needsDisplay = needsDisplay || row != m.videoEditLastPosterRow || col != m.videoEditLastPosterCol
+					if needsDisplay {
+						log.Printf("tmdbMetadataMsg: triggering posterDisplayCmd for path=%s at row=%d col=%d", path, row, col)
+						posterCmd = m.videoEditPosterDisplayCmd()
+						m.videoEditPosterDisplayed = true
+					} else {
+						log.Printf("tmdbMetadataMsg: poster already displayed at this position")
+					}
+				} else {
+					log.Printf("tmdbMetadataMsg: overlay position not set yet, will display on next update")
+				}
+			}
+		}
+		return m, posterCmd
 	case errorMsg:
 		m.message = string(msg)
 		return m, nil
@@ -1846,19 +1906,48 @@ func (m *model) applyTMDBMetadata(meta *tmdb.VideoMetadata) {
 	}
 
 	// Save poster to permanent storage (~/.config/kitvc/posters/)
-	if meta.PosterPath != "" {
+	// Priority: Episode still > Season poster > Series poster
+	var posterURL string
+	var posterName string
+	
+	if meta.StillPath != "" && meta.Episode > 0 {
+		// Episode still image (highest priority for TV episodes)
+		posterURL = meta.StillPath
+		posterName = fmt.Sprintf("tmdb_%d_s%d_e%d", meta.ID, meta.Season, meta.Episode)
+		log.Printf("Using episode still: %s", posterURL)
+	} else if meta.SeasonPosterPath != "" && meta.Season > 0 {
+		// Season poster
+		posterURL = meta.SeasonPosterPath
+		posterName = fmt.Sprintf("tmdb_%d_s%d", meta.ID, meta.Season)
+		log.Printf("Using season poster: %s", posterURL)
+	} else if meta.PosterPath != "" {
+		// Series poster (fallback)
+		posterURL = meta.PosterPath
+		posterName = fmt.Sprintf("tmdb_%d", meta.ID)
+		log.Printf("Using series poster: %s", posterURL)
+	}
+	
+	if posterURL != "" {
 		configDir, err := config.GetConfigDir()
 		if err == nil {
 			postersDir := filepath.Join(configDir, "posters")
-			name := meta.Series
-			if name == "" {
-				name = meta.Title
+			if posterName == "" {
+				posterName = meta.Series
+				if posterName == "" {
+					posterName = meta.Title
+				}
 			}
-			if name != "" {
-				localPath, err := tmdb.DownloadPoster(meta.PosterPath, postersDir, name)
+			if posterName != "" {
+				localPath, err := tmdb.DownloadPoster(posterURL, postersDir, posterName)
+				log.Printf("DownloadPoster: localPath=%q err=%v", localPath, err)
 				if err == nil {
 					m.videoEdit.SetThumbnail(localPath)
-					log.Printf("Poster saved to: %s", localPath)
+					m.videoEdit.SetPosterPath(localPath)
+					// Update form fields: poster_path (TMDB URL) and local_poster_path (local file)
+					fullPosterURL := "https://image.tmdb.org/t/p/w500" + posterURL
+					m.videoEdit.SetFieldValue(12, fullPosterURL)  // poster_path
+					m.videoEdit.SetFieldValue(13, localPath)       // local_poster_path
+					log.Printf("Poster saved to: %s, videoEdit.PosterPath()=%s", localPath, m.videoEdit.PosterPath())
 				}
 			}
 		}
@@ -1880,6 +1969,17 @@ func (m model) handleVideoEditSubmit(values []string) model {
 		for _, path := range m.editVideoPaths {
 			if err := db.UpdateVideoField(path, field, val); err != nil {
 				log.Printf("Failed to update video %s: %v", path, err)
+			}
+		}
+	}
+
+	if m.videoEdit != nil {
+		posterPath := m.videoEdit.PosterPath()
+		if posterPath != "" {
+			for _, path := range m.editVideoPaths {
+				if err := db.UpdateVideoField(path, "poster_path", posterPath); err != nil {
+					log.Printf("Failed to update poster path for video %s: %v", path, err)
+				}
 			}
 		}
 	}
@@ -2019,8 +2119,11 @@ func (m *model) posterPos() (row, col, w, h int) {
 	}
 	sl := m.videoFetch.OverlayStartLine()
 	sc := m.videoFetch.OverlayStartCol()
-	row = sl + 1 + m.videoFetch.PosterRow() // content(1) + header+posterBorder(PosterRow)
-	col = sc + 2                             // left border(1) + left pad(1)
+	// sl is the starting line of the modal border (row 0 of the modal)
+	// Modal content starts at row 1 (inside the top border)
+	// Header height tells us where the poster block starts relative to content top
+	row = sl + 1 + m.videoFetch.HeaderHeight()
+	col = sc + 2 // left border(1) + left pad(1)
 	w = m.videoFetch.PosterCols()
 	h = m.videoFetch.PosterRows()
 	return
@@ -2039,6 +2142,7 @@ func (m *model) posterClearCmd() tea.Cmd {
 		defer f.Close()
 		// Move cursor to poster top-left and delete any Kitty image at this position
 		fmt.Fprintf(f, "\x1b[%d;%dH", row+1, col+1)
+		// a=d: delete, d=c: delete by column/row position
 		f.WriteString("\x1b_Ga=d,d=c\x1b\\")
 		f.WriteString("\x1b[?25l")
 		f.Sync()
@@ -2061,17 +2165,19 @@ func (m *model) posterDisplayCmd() tea.Cmd {
 		}
 		row, col, _, _ := m.posterPos()
 
-		// Delete old poster if position changed (e.g. overlay resized)
 		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
 		if err != nil {
 			return nil
 		}
+		// Always clear current position before drawing
+		fmt.Fprintf(f, "\x1b[%d;%dH", row+1, col+1)
+		f.WriteString("\x1b_Ga=d,d=c\x1b\\")
+		
+		// If position moved, clear old position too
 		if oldRow >= 0 && (oldRow != row || oldCol != col) {
 			fmt.Fprintf(f, "\x1b[%d;%dH", oldRow+1, oldCol+1)
 			f.WriteString("\x1b_Ga=d,d=c\x1b\\")
 		}
-		fmt.Fprintf(f, "\x1b[%d;%dH", row+1, col+1)
-		f.WriteString("\x1b_Ga=d,d=c\x1b\\")
 		f.Close()
 
 		// Draw new poster with chafa
@@ -2099,6 +2205,102 @@ func (m *model) posterDisplayCmd() tea.Cmd {
 		f2.Sync()
 
 		m.lastPosterRow, m.lastPosterCol = row, col
+		return nil
+	}
+}
+
+func (m *model) videoEditPosterPos() (row, col, w, h int) {
+	if m.videoEdit == nil {
+		return 0, 0, 0, 0
+	}
+	sl := m.videoEdit.OverlayStartLine()
+	sc := m.videoEdit.OverlayStartCol()
+	w = m.videoEdit.PosterCols()
+	h = m.videoEdit.PosterRows()
+	dialogW := m.videoEdit.Width() - 4
+	if dialogW < 40 {
+		dialogW = 40
+	}
+	if dialogW > 80 {
+		dialogW = 80
+	}
+	// sl is top border of modal
+	// HeaderHeight() is distance from content start to poster start
+	row = sl + 1 + m.videoEdit.HeaderHeight()
+	col = sc + 2 + (dialogW-w)/2
+	return
+}
+
+func (m *model) videoEditPosterClearCmd() tea.Cmd {
+	row, col, w, h := m.videoEditPosterPos()
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+		if err != nil {
+			return nil
+		}
+		defer f.Close()
+		fmt.Fprintf(f, "\x1b[%d;%dH", row+1, col+1)
+		f.WriteString("\x1b_Ga=d,d=c\x1b\\")
+		f.WriteString("\x1b[?25l")
+		f.Sync()
+		return nil
+	}
+}
+
+func (m *model) videoEditPosterDisplayCmd() tea.Cmd {
+	if m.videoEdit == nil || m.videoEdit.PosterPath() == "" {
+		return nil
+	}
+	path := m.videoEdit.PosterPath()
+	cols := m.videoEdit.PosterCols()
+	rows := m.videoEdit.PosterRows()
+	oldRow, oldCol := m.videoEditLastPosterRow, m.videoEditLastPosterCol
+
+	return func() tea.Msg {
+		if m.videoEdit == nil {
+			return nil
+		}
+		row, col, _, _ := m.videoEditPosterPos()
+
+		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+		if err != nil {
+			return nil
+		}
+		// Clear current and old positions
+		fmt.Fprintf(f, "\x1b[%d;%dH", row+1, col+1)
+		f.WriteString("\x1b_Ga=d,d=c\x1b\\")
+		if oldRow >= 0 && (oldRow != row || oldCol != col) {
+			fmt.Fprintf(f, "\x1b[%d;%dH", oldRow+1, oldCol+1)
+			f.WriteString("\x1b_Ga=d,d=c\x1b\\")
+		}
+		f.Close()
+
+		cmd := exec.Command("chafa", "-f", "kitty",
+			"--symbols", "none",
+			"--probe", "off",
+			"--size", fmt.Sprintf("%dx%d", cols, rows),
+			path)
+		cmd.Env = append(os.Environ(), "TERM=xterm-kitty")
+		out, err := cmd.Output()
+		if err != nil {
+			return nil
+		}
+
+		f2, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+		if err != nil {
+			return nil
+		}
+		defer f2.Close()
+		f2.WriteString("\x1b[?25l")
+		fmt.Fprintf(f2, "\x1b[%d;%dH", row+1, col+1)
+		f2.Write(out)
+		f2.WriteString("\x1b[?25l")
+		f2.Sync()
+
+		m.videoEditLastPosterRow, m.videoEditLastPosterCol = row, col
 		return nil
 	}
 }
@@ -2286,6 +2488,8 @@ func (m model) View() tea.View {
 
 		if m.videoFetch != nil {
 			m.videoFetch.SetOverlayPos(startLine, startCol)
+		} else if m.videoEdit != nil {
+			m.videoEdit.SetOverlayPos(startLine, startCol)
 		}
 
 		for i := 0; i < ovH && startLine+i < len(bgLines); i++ {

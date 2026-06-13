@@ -15,6 +15,7 @@ var videoEditFieldNames = []string{
 	"type", "category", "subcategory", "genres", "title", "series",
 	"season", "episode", "air_date",
 	"series_overview", "synopsis", "episode_overview",
+	"poster_path", "local_poster_path",
 }
 
 var videoEditFieldKinds = []videoEditFieldKind{
@@ -30,6 +31,8 @@ var videoEditFieldKinds = []videoEditFieldKind{
 	videoFieldTextArea, // Series Overview
 	videoFieldTextArea, // Synopsis
 	videoFieldTextArea, // Episode Overview
+	videoFieldInput,    // Poster Path (TMDB)
+	videoFieldInput,    // Local Poster Path
 }
 
 var videoEditOptions = [][]string{
@@ -45,6 +48,8 @@ var videoEditOptions = [][]string{
 	nil,               // Series Overview
 	nil,               // Synopsis
 	nil,               // Episode Overview
+	nil,               // Poster Path
+	nil,               // Local Poster Path
 }
 
 func videoEditInitialValues(v db.VideoData) []string {
@@ -61,6 +66,8 @@ func videoEditInitialValues(v db.VideoData) []string {
 		v.SeriesOverview,
 		v.Synopsis,
 		v.EpisodeOverview,
+		v.PosterPath,
+		v.LocalPosterPath,
 	}
 }
 

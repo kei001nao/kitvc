@@ -1,6 +1,8 @@
 package tmdb
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -224,20 +226,21 @@ func (c *Client) FetchMovieDetails(tmdbID int) (*MovieDetails, error) {
 }
 
 type VideoMetadata struct {
-	ID              int
-	Title           string
-	Series          string
-	Season          int
-	Episode         int
-	AirDate         string
-	Synopsis        string
-	SeriesOverview  string
-	EpisodeOverview string
-	Genres          []string
-	Cast            []string
-	Director        string
-	PosterPath      string
-	StillPath       string
+	ID               int
+	Title            string
+	Series           string
+	Season           int
+	Episode          int
+	AirDate          string
+	Synopsis         string
+	SeriesOverview   string
+	EpisodeOverview  string
+	Genres           []string
+	Cast             []string
+	Director         string
+	PosterPath       string
+	SeasonPosterPath string
+	StillPath        string
 }
 
 func (c *Client) FetchVideoMetadataByID(tmdbID int, isTV bool, seasonNum, episodeNum int) (*VideoMetadata, error) {
@@ -265,6 +268,9 @@ func (c *Client) FetchVideoMetadataByID(tmdbID int, isTV bool, seasonNum, episod
 			meta.Season = seasonNum
 			sDetails, err := c.FetchTVSeason(tmdbID, seasonNum)
 			if err == nil {
+				if sDetails.PosterPath != "" {
+					meta.SeasonPosterPath = sDetails.PosterPath
+				}
 				if episodeNum > 0 {
 					meta.Episode = episodeNum
 					for _, ep := range sDetails.Episodes {
@@ -325,7 +331,9 @@ func DownloadPoster(imageURL, targetDir, name string) (string, error) {
 		return "", err
 	}
 	
-	targetPath := filepath.Join(targetDir, name+".jpg")
+	hash := md5.Sum([]byte(fullURL))
+	hashStr := hex.EncodeToString(hash[:])
+	targetPath := filepath.Join(targetDir, fmt.Sprintf("%s_%s.jpg", name, hashStr[:8]))
 	if _, err := os.Stat(targetPath); err == nil {
 		return targetPath, nil
 	}
