@@ -23,6 +23,8 @@ type MusicConfig struct {
 type VideoConfig struct {
 	Directories []string `toml:"directories"`
 	Fullscreen  bool     `toml:"fullscreen"`
+	TMDBAPIKey  string   `toml:"tmdb_api_key"`
+	LastLanguage string  `toml:"last_language"`
 }
 
 type PlaylistConfig struct {

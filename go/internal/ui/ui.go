@@ -13,6 +13,7 @@ import (
 	"kitvc/internal/db"
 	"kitvc/internal/library"
 	"kitvc/internal/player"
+	"kitvc/internal/tmdb"
 
 	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
@@ -111,6 +112,7 @@ type model struct {
 	editVideoFieldNames []string
 	editVideoPaths      []string
 	videoEdit           *videoEditModal
+	videoFetch          *videoFetchModal
 	playingAlbumID    int64
 	currentFilterID   int64
 	currentFilterName string
@@ -163,6 +165,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.syncFocus()
 		return m, nil
+	}
+
+	// Handle TMDB Metadata and error messages first so they aren't swallowed by modals
+	switch msg := msg.(type) {
+	case tmdbMetadataMsg:
+		m.applyTMDBMetadata(msg.metadata)
+		return m, nil
+	case errorMsg:
+		if m.videoFetch == nil {
+			m.message = string(msg)
+			return m, nil
+		}
 	}
 
 	// Handle filter edit modal
@@ -362,6 +376,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.videoFetch != nil {
+		var cmd tea.Cmd
+		m.videoFetch, cmd = m.videoFetch.Update(msg)
+		if m.videoFetch.Cancelled {
+			m.videoFetch = nil
+			return m, nil
+		}
+		if m.videoFetch.Submitted {
+			m, fetchCmd := m.handleVideoFetchSubmit()
+			m.videoFetch = nil
+			return m, fetchCmd
+		}
+		return m, cmd
+	}
+
 	if m.videoEdit != nil {
 		var cmd tea.Cmd
 		m.videoEdit, cmd = m.videoEdit.Update(msg)
@@ -381,13 +410,55 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.videoEdit = nil
 			return m, cmd
 		}
+		if m.videoEdit.searchTMDB {
+			m.videoEdit.searchTMDB = false
+			query := ""
+			isTV := false
+			initialSeason := 0
+			initialEpisode := 0
+
+			// Extract current values from videoEdit fields
+			values := m.videoEdit.Values()
+			// type is at 0, series at 5, title at 4, season at 6, episode at 7
+			if values[0] == "TV Show" {
+				isTV = true
+				query = values[5] // Series
+				if query == "" {
+					query = values[4] // Title
+				}
+				initialSeason, _ = strconv.Atoi(values[6])
+				initialEpisode, _ = strconv.Atoi(values[7])
+			} else {
+				query = values[4] // Title
+			}
+
+			apiKey := m.config.Video.TMDBAPIKey
+			if apiKey == "" {
+				apiKey = os.Getenv("TMDB_API_KEY")
+			}
+
+			if apiKey == "" {
+				m.message = "TMDB API Key not set in config.toml or TMDB_API_KEY env"
+				return m, cmd
+			}
+
+			m.videoFetch = newVideoFetchModal(apiKey, query, isTV, initialSeason, initialEpisode)
+			m.videoFetch.SetSize(m.width, m.height-10)
+			return m, cmd
+		}
 		return m, cmd
 	}
 
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.KeyPressMsg:
+	case tmdbMetadataMsg:
+		m.applyTMDBMetadata(msg.metadata)
+		return m, nil
+	case errorMsg:
+		m.message = string(msg)
+		return m, nil
+	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if m.player != nil {
@@ -1689,6 +1760,70 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 	return m
 }
 
+type tmdbMetadataMsg struct {
+	metadata *tmdb.VideoMetadata
+}
+
+func (m model) handleVideoFetchSubmit() (model, tea.Cmd) {
+	id := m.videoFetch.SelectedID
+	isTV := m.videoFetch.SelectedIsTV
+	season := m.videoFetch.SelectedSeason
+	episode := m.videoFetch.SelectedEpisode
+	client := m.videoFetch.client
+
+	m.message = "Fetching TMDB metadata..."
+
+	return m, func() tea.Msg {
+		meta, err := client.FetchVideoMetadataByID(id, isTV, season, episode)
+		if err != nil {
+			return errorMsg(err.Error()) // Reusing errorMsg or defining a new one
+		}
+		return tmdbMetadataMsg{meta}
+	}
+}
+
+func (m *model) applyTMDBMetadata(meta *tmdb.VideoMetadata) {
+	if m.videoEdit == nil {
+		return
+	}
+
+	// Indices: 0:Type, 4:Title, 5:Series, 6:Season, 7:Episode, 8:Date, 9:SeriesOverview, 10:Synopsis, 11:EpisodeOverview, 3:Genres
+	
+	// Automatic Type selection
+	if meta.Series != "" {
+		m.videoEdit.fields[0].Select = 1 // TV Show
+		m.videoEdit.fields[5].Input.SetValue(meta.Series)
+	} else {
+		m.videoEdit.fields[0].Select = 0 // Movie
+		m.videoEdit.fields[5].Input.SetValue("")
+	}
+	
+	m.videoEdit.fields[4].Input.SetValue(meta.Title)
+	
+	if meta.Season > 0 {
+		m.videoEdit.fields[6].Input.SetValue(strconv.Itoa(meta.Season))
+	} else {
+		m.videoEdit.fields[6].Input.SetValue("")
+	}
+
+	if meta.Episode > 0 {
+		m.videoEdit.fields[7].Input.SetValue(strconv.Itoa(meta.Episode))
+	} else {
+		m.videoEdit.fields[7].Input.SetValue("")
+	}
+	
+	m.videoEdit.fields[8].Input.SetValue(meta.AirDate)
+	m.videoEdit.fields[9].Input.SetValue(meta.SeriesOverview)
+	m.videoEdit.fields[10].Input.SetValue(meta.Synopsis)
+	m.videoEdit.fields[11].Input.SetValue(meta.EpisodeOverview)
+	
+	if len(meta.Genres) > 0 {
+		m.videoEdit.fields[3].Input.SetValue(strings.Join(meta.Genres, ", "))
+	}
+
+	m.message = fmt.Sprintf("Applied: %s", meta.Title)
+}
+
 func (m model) handleVideoEditSubmit(values []string) model {
 	for i, field := range m.editVideoFieldNames {
 		if i >= len(values) {
@@ -1963,227 +2098,68 @@ func (m model) View() tea.View {
 
 	footer := m.renderFooter()
 
-	mainView := lipgloss.JoinVertical(lipgloss.Left,
+	backgroundView := lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr)),
 		footer,
 	)
 
-	if m.modal != nil && m.modal.Active() {
-		m.modal.SetSize(m.width, m.height)
-		overlay := m.modal.View()
-		contentArea := lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr))
-		contentLines := strings.Split(contentArea, "\n")
-		dialogLines := strings.Split(overlay, "\n")
-
-		// trim trailing empty lines from dialog
-		for len(dialogLines) > 0 && dialogLines[len(dialogLines)-1] == "" {
-			dialogLines = dialogLines[:len(dialogLines)-1]
-		}
-
-		dialogH := len(dialogLines)
-		if dialogH > 0 {
-			startRow := (len(contentLines) - dialogH) / 2
-			if startRow < 0 {
-				startRow = 0
-			}
-
-			dialogW := 0
-			for _, line := range dialogLines {
-				if w := lipgloss.Width(line); w > dialogW {
-					dialogW = w
-				}
-			}
-			leftPad := (m.width - dialogW) / 2
-			if leftPad < 0 {
-				leftPad = 0
-			}
-			padStr := strings.Repeat(" ", leftPad)
-
-			for i := 0; i < dialogH && startRow+i < len(contentLines); i++ {
-				contentLines[startRow+i] = padStr + dialogLines[i]
-			}
-		}
-
-		mainView = lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			strings.Join(contentLines, "\n"),
-			footer,
-		)
+	// If any modal is active, overlay it
+	var overlay string
+	if m.videoFetch != nil {
+		m.videoFetch.SetSize(m.width-10, m.height-6)
+		overlay = m.videoFetch.View()
+	} else if m.videoEdit != nil {
+		m.videoEdit.SetSize(m.width-10, m.height-6)
+		overlay = m.videoEdit.View()
+	} else if m.filterCondEdit != nil {
+		m.filterCondEdit.SetSize(m.width-10, m.height-6)
+		overlay = m.filterCondEdit.View()
+	} else if m.filterEdit != nil {
+		m.filterEdit.SetSize(m.width-10, m.height-6)
+		overlay = m.filterEdit.View()
+	} else if m.sortFieldSelect != nil {
+		m.sortFieldSelect.SetSize(m.width-10, m.height-6)
+		overlay = m.sortFieldSelect.View()
+	} else if m.modal != nil && m.modal.Active() {
+		m.modal.SetSize(m.width-10, m.height-6)
+		overlay = m.modal.View()
 	}
 
-	// Render filter edit modal
-	if m.filterEdit != nil {
-		m.filterEdit.SetSize(m.width, m.height)
-		overlay := m.filterEdit.View()
-		contentArea := lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr))
-		contentLines := strings.Split(contentArea, "\n")
-		dialogLines := strings.Split(overlay, "\n")
-
-		for len(dialogLines) > 0 && dialogLines[len(dialogLines)-1] == "" {
-			dialogLines = dialogLines[:len(dialogLines)-1]
+	mainView := backgroundView
+	if overlay != "" {
+		// Manual overlay by patching lines to preserve header/footer
+		bgLines := strings.Split(backgroundView, "\n")
+		ovLines := strings.Split(overlay, "\n")
+		
+		// Remove empty trailing lines from overlay
+		for len(ovLines) > 0 && strings.TrimSpace(ovLines[len(ovLines)-1]) == "" {
+			ovLines = ovLines[:len(ovLines)-1]
 		}
 
-		dialogH := len(dialogLines)
-		if dialogH > 0 {
-			startRow := (len(contentLines) - dialogH) / 2
-			if startRow < 0 {
-				startRow = 0
-			}
-
-			dialogW := 0
-			for _, line := range dialogLines {
-				if w := lipgloss.Width(line); w > dialogW {
-					dialogW = w
-				}
-			}
-			leftPad := (m.width - dialogW) / 2
-			if leftPad < 0 {
-				leftPad = 0
-			}
-			padStr := strings.Repeat(" ", leftPad)
-
-			for i := 0; i < dialogH && startRow+i < len(contentLines); i++ {
-				contentLines[startRow+i] = padStr + dialogLines[i]
+		ovH := len(ovLines)
+		ovW := 0
+		for _, l := range ovLines {
+			if w := lipgloss.Width(l); w > ovW {
+				ovW = w
 			}
 		}
 
-		mainView = lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			strings.Join(contentLines, "\n"),
-			footer,
-		)
+		startLine := (m.height - ovH) / 2
+		if startLine < 1 { startLine = 1 }
+		
+		startCol := (m.width - ovW) / 2
+		if startCol < 0 { startCol = 0 }
+
+		for i := 0; i < ovH && startLine+i < len(bgLines); i++ {
+			ovLine := ovLines[i]
+			// Simple replacement of line content
+			bgLines[startLine+i] = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, ovLine)
+		}
+		mainView = strings.Join(bgLines, "\n")
 	}
 
-	// Render video edit modal
-	if m.videoEdit != nil {
-		m.videoEdit.SetSize(m.width, m.height)
-		overlay := m.videoEdit.View()
-		contentArea := lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr))
-		contentLines := strings.Split(contentArea, "\n")
-		dialogLines := strings.Split(overlay, "\n")
-
-		for len(dialogLines) > 0 && dialogLines[len(dialogLines)-1] == "" {
-			dialogLines = dialogLines[:len(dialogLines)-1]
-		}
-
-		dialogH := len(dialogLines)
-		if dialogH > 0 {
-			startRow := (len(contentLines) - dialogH) / 2
-			if startRow < 0 {
-				startRow = 0
-			}
-
-			dialogW := 0
-			for _, line := range dialogLines {
-				if w := lipgloss.Width(line); w > dialogW {
-					dialogW = w
-				}
-			}
-			leftPad := (m.width - dialogW) / 2
-			if leftPad < 0 {
-				leftPad = 0
-			}
-			padStr := strings.Repeat(" ", leftPad)
-
-			for i := 0; i < dialogH && startRow+i < len(contentLines); i++ {
-				contentLines[startRow+i] = padStr + dialogLines[i]
-			}
-		}
-
-		mainView = lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			strings.Join(contentLines, "\n"),
-			footer,
-		)
-	}
-
-	// Render nested modals
-	if m.filterCondEdit != nil {
-		m.filterCondEdit.SetSize(m.width, m.height)
-		overlay := m.filterCondEdit.View()
-		contentArea := lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr))
-		contentLines := strings.Split(contentArea, "\n")
-		dialogLines := strings.Split(overlay, "\n")
-
-		for len(dialogLines) > 0 && dialogLines[len(dialogLines)-1] == "" {
-			dialogLines = dialogLines[:len(dialogLines)-1]
-		}
-
-		dialogH := len(dialogLines)
-		if dialogH > 0 {
-			startRow := (len(contentLines) - dialogH) / 2
-			if startRow < 0 {
-				startRow = 0
-			}
-
-			dialogW := 0
-			for _, line := range dialogLines {
-				if w := lipgloss.Width(line); w > dialogW {
-					dialogW = w
-				}
-			}
-			leftPad := (m.width - dialogW) / 2
-			if leftPad < 0 {
-				leftPad = 0
-			}
-			padStr := strings.Repeat(" ", leftPad)
-
-			for i := 0; i < dialogH && startRow+i < len(contentLines); i++ {
-				contentLines[startRow+i] = padStr + dialogLines[i]
-			}
-		}
-
-		mainView = lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			strings.Join(contentLines, "\n"),
-			footer,
-		)
-	}
-
-	if m.sortFieldSelect != nil {
-		m.sortFieldSelect.SetSize(m.width, m.height)
-		overlay := m.sortFieldSelect.View()
-		contentArea := lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr))
-		contentLines := strings.Split(contentArea, "\n")
-		dialogLines := strings.Split(overlay, "\n")
-
-		for len(dialogLines) > 0 && dialogLines[len(dialogLines)-1] == "" {
-			dialogLines = dialogLines[:len(dialogLines)-1]
-		}
-
-		dialogH := len(dialogLines)
-		if dialogH > 0 {
-			startRow := (len(contentLines) - dialogH) / 2
-			if startRow < 0 {
-				startRow = 0
-			}
-
-			dialogW := 0
-			for _, line := range dialogLines {
-				if w := lipgloss.Width(line); w > dialogW {
-					dialogW = w
-				}
-			}
-			leftPad := (m.width - dialogW) / 2
-			if leftPad < 0 {
-				leftPad = 0
-			}
-			padStr := strings.Repeat(" ", leftPad)
-
-			for i := 0; i < dialogH && startRow+i < len(contentLines); i++ {
-				contentLines[startRow+i] = padStr + dialogLines[i]
-			}
-		}
-
-		mainView = lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			strings.Join(contentLines, "\n"),
-			footer,
-		)
-	}
-
-	v := tea.NewView(mainView + "\x1b[?25l")
+	v := tea.NewView(mainView)
 	v.AltScreen = true
 	return v
 }

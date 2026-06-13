@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -38,6 +37,7 @@ type videoEditField struct {
 	Input   textinput.Model
 	Select  int
 	Options []string
+	Height  int
 }
 
 var videoTypeOptions = []string{"Movie", "TV Show", "Music Video"}
@@ -46,9 +46,15 @@ func newVideoEditModal(filename string, labels []string, fieldKinds []videoEditF
 	fields := make([]videoEditField, len(labels))
 	for i := range labels {
 		f := videoEditField{
-			Label: labels[i],
-			Kind:  fieldKinds[i],
+			Label:  labels[i],
+			Kind:   fieldKinds[i],
+			Height: 1, // Default height
 		}
+		// Increase height for overview/synopsis fields
+		if strings.Contains(strings.ToLower(labels[i]), "overview") || strings.Contains(strings.ToLower(labels[i]), "synopsis") {
+			f.Height = 5
+		}
+
 		switch f.Kind {
 		case videoFieldInput:
 			ti := textinput.New()
@@ -94,9 +100,14 @@ func (m *videoEditModal) SetThumbnail(path string) {
 
 func (m *videoEditModal) Update(msg tea.Msg) (*videoEditModal, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		switch keyMsg.String() {
+		k := strings.ToLower(keyMsg.String())
+		// Global keys for this modal
+		switch k {
 		case "esc":
 			m.cancelled = true
+			return m, nil
+		case "ctrl+t", "ctrl+s", "ctrl+f":
+			m.searchTMDB = true
 			return m, nil
 		case "enter", "ctrl+j":
 			m.submitted = true
@@ -113,13 +124,10 @@ func (m *videoEditModal) Update(msg tea.Msg) (*videoEditModal, tea.Cmd) {
 		case "pgdown":
 			m.viewport.ScrollDown(m.height - 4)
 			return m, nil
-		case "ctrl+t":
-			m.searchTMDB = true
-			return m, nil
 		}
 	}
 
-	// Update focused field
+	// Update focused field if it didn't match global keys
 	if m.focusIndex < len(m.fields) {
 		f := &m.fields[m.focusIndex]
 		switch f.Kind {
@@ -150,23 +158,22 @@ func (m *videoEditModal) Update(msg tea.Msg) (*videoEditModal, tea.Cmd) {
 }
 
 func (m *videoEditModal) scrollToFocused() {
-	y := 2
+	y := 0
 	for i := 0; i < m.focusIndex; i++ {
-		switch m.fields[i].Kind {
-		case videoFieldInput:
-			y += 3
-		case videoFieldSelect:
-			y += 3
-		}
+		// Label (1) + Input/Select (Height) + Margin (1)
+		y += 1 + m.fields[i].Height + 1
 	}
-	vpH := m.height - 6
+	vpH := m.viewport.Height()
 	if vpH < 1 {
 		vpH = 1
 	}
+	
+	fieldH := 1 + m.fields[m.focusIndex].Height
+	
 	if y < m.viewport.YOffset() {
 		m.viewport.SetYOffset(y)
-	} else if y+3 > m.viewport.YOffset()+vpH {
-		m.viewport.SetYOffset(y + 3 - vpH)
+	} else if y+fieldH > m.viewport.YOffset()+vpH {
+		m.viewport.SetYOffset(y + fieldH - vpH + 1)
 	}
 }
 
@@ -244,15 +251,13 @@ func (m *videoEditModal) View() string {
 		dialogW = 80
 	}
 	thumbAreaW := m.thumbnailWidth + 2
- fieldsW := dialogW - thumbAreaW - 4
+	fieldsW := dialogW - thumbAreaW - 4
 	if fieldsW < 20 {
 		fieldsW = 20
 	}
 
-	var lines []string
-
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Render("Edit Video"))
-
+	var headerLines []string
+	headerLines = append(headerLines, lipgloss.NewStyle().Bold(true).Render("Edit Video"))
 	if m.filename != "" {
 		name := m.filename
 		maxLen := dialogW - 4
@@ -260,28 +265,37 @@ func (m *videoEditModal) View() string {
 			maxLen = 20
 		}
 		if len(name) > maxLen {
-			lines = append(lines, lipgloss.NewStyle().
-				Foreground(lipgloss.Color("252")).
-				Render(name[:maxLen]))
-			lines = append(lines, lipgloss.NewStyle().
-				Foreground(lipgloss.Color("252")).
-				Render(name[maxLen:]))
+			headerLines = append(headerLines, lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(name[:maxLen]))
+			headerLines = append(headerLines, lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(name[maxLen:]))
 		} else {
-			lines = append(lines, lipgloss.NewStyle().
-				Foreground(lipgloss.Color("252")).
-				Render(name))
+			headerLines = append(headerLines, lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(name))
 		}
 	}
+	headerLines = append(headerLines, "")
+	headerView := strings.Join(headerLines, "\n")
 
-	lines = append(lines, "")
+	var footerLines []string
+	tmdbBtn := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Ctrl+s: TMDB Search")
+	footerKeys := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Tab/↓: Next  Shift+Tab/↑: Prev  Enter: Save  Esc: Cancel")
+	footerLines = append(footerLines, "")
+	footerLines = append(footerLines, tmdbBtn+"  "+footerKeys)
+	footerView := strings.Join(footerLines, "\n")
+
+	// Fixed header and footer height
+	headerH := lipgloss.Height(headerView)
+	footerH := lipgloss.Height(footerView)
+	vpH := m.height - 10 - headerH - footerH // Subtract padding and border
+	if vpH < 5 {
+		vpH = 5
+	}
+	m.viewport.SetHeight(vpH)
 
 	thumbBlock := m.renderThumbnail()
 	thumbLines := strings.Split(thumbBlock, "\n")
 
-	fieldLines := make([]string, 0)
+	var fieldLines []string
 	for i, f := range m.fields {
 		isFocused := i == m.focusIndex
-
 		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 		if isFocused {
 			labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Bold(true)
@@ -291,15 +305,23 @@ func (m *videoEditModal) View() string {
 		switch f.Kind {
 		case videoFieldInput:
 			f.Input.SetWidth(fieldsW - 2)
-			fieldLines = append(fieldLines, f.Input.View())
+			if f.Height > 1 {
+				// For multi-line, we just show the start of the value or multiple lines if we had a TextArea
+				// Since textinput.Model is single-line, we'll just show the value but allocate space
+				val := f.Input.View()
+				fieldLines = append(fieldLines, val)
+				// Add extra empty lines for the allocated height
+				for h := 1; h < f.Height; h++ {
+					fieldLines = append(fieldLines, "")
+				}
+			} else {
+				fieldLines = append(fieldLines, f.Input.View())
+			}
 		case videoFieldSelect:
 			var opts []string
 			for j, opt := range f.Options {
 				if j == f.Select {
-					opts = append(opts, lipgloss.NewStyle().
-						Foreground(lipgloss.Color("229")).
-						Background(lipgloss.Color("57")).
-						Render("▸ "+opt))
+					opts = append(opts, lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Render("▸ "+opt))
 				} else {
 					opts = append(opts, "  "+opt)
 				}
@@ -309,16 +331,12 @@ func (m *videoEditModal) View() string {
 		fieldLines = append(fieldLines, "")
 	}
 
-	vpH := m.height - 6
-	if vpH < 1 {
-		vpH = 1
-	}
-
 	maxLines := len(fieldLines)
 	if len(thumbLines) > maxLines {
 		maxLines = len(thumbLines)
 	}
 
+	var combinedLines []string
 	for i := 0; i < maxLines; i++ {
 		left := ""
 		if i < len(thumbLines) {
@@ -328,43 +346,27 @@ func (m *videoEditModal) View() string {
 		if leftPad < 0 {
 			leftPad = 0
 		}
-
 		right := ""
 		if i < len(fieldLines) {
 			right = fieldLines[i]
 		}
-
-		lines = append(lines, left+strings.Repeat(" ", leftPad)+right)
+		combinedLines = append(combinedLines, left+strings.Repeat(" ", leftPad)+right)
 	}
 
-	scrollInfo := ""
-	if maxLines > vpH {
-		topLine := m.viewport.YOffset() + 1
-		bottomLine := m.viewport.YOffset() + vpH
-		if bottomLine > maxLines {
-			bottomLine = maxLines
-		}
-		scrollInfo = fmt.Sprintf("  [%d-%d/%d]", topLine, bottomLine, maxLines)
-	}
-
-	tmdbBtn := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Render("Ctrl+t: TMDB Search")
-	footerKeys := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Render("Tab/↓: Next  Shift+Tab/↑: Prev  Enter: Save  Esc: Cancel" + scrollInfo)
-	lines = append(lines, "")
-	lines = append(lines, tmdbBtn+"  "+footerKeys)
-
-	content := strings.Join(lines, "\n")
-	m.viewport.SetContent(content)
+	m.viewport.SetContent(strings.Join(combinedLines, "\n"))
+	
+	mainView := lipgloss.JoinVertical(lipgloss.Left,
+		headerView,
+		m.viewport.View(),
+		footerView,
+	)
 
 	return lipgloss.NewStyle().
 		Width(dialogW).
-		Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("62")).
-		Render(m.viewport.View())
+		Render(mainView)
 }
 
 func (m *videoEditModal) Values() []string {

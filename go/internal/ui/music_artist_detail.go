@@ -134,7 +134,7 @@ func (mad *musicArtistDetail) loadTracksForAlbum(albumTitle string) {
 func (mad musicArtistDetail) Update(msg tea.Msg) (musicArtistDetail, tea.Cmd) {
 	var cmd tea.Cmd
 
-	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "enter":
 			if mad.focusedUpper {

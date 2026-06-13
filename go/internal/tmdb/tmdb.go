@@ -89,6 +89,7 @@ type TVDetailsFull struct {
 	PosterPath       string `json:"poster_path"`
 	FirstAirDate     string `json:"first_air_date"`
 	NumberOfSeasons  int    `json:"number_of_seasons"`
+	Seasons          []SeasonInfo `json:"seasons"`
 	Genres           []struct {
 		Name string `json:"name"`
 	} `json:"genres"`
@@ -97,6 +98,15 @@ type TVDetailsFull struct {
 			Name string `json:"name"`
 		} `json:"cast"`
 	} `json:"credits"`
+}
+
+type SeasonInfo struct {
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	Overview     string `json:"overview"`
+	SeasonNumber int    `json:"season_number"`
+	EpisodeCount int    `json:"episode_count"`
+	AirDate      string `json:"air_date"`
 }
 
 func NewClient(apiKey string) *Client {
@@ -209,6 +219,97 @@ func (c *Client) FetchMovieDetails(tmdbID int) (*MovieDetails, error) {
 		return nil, err
 	}
 	return &details, nil
+}
+
+type VideoMetadata struct {
+	ID              int
+	Title           string
+	Series          string
+	Season          int
+	Episode         int
+	AirDate         string
+	Synopsis        string
+	SeriesOverview  string
+	EpisodeOverview string
+	Genres          []string
+	Cast            []string
+	Director        string
+	PosterPath      string
+	StillPath       string
+}
+
+func (c *Client) FetchVideoMetadataByID(tmdbID int, isTV bool, seasonNum, episodeNum int) (*VideoMetadata, error) {
+	meta := &VideoMetadata{ID: tmdbID}
+
+	if isTV {
+		details, err := c.FetchTVDetails(tmdbID)
+		if err != nil {
+			return nil, err
+		}
+		meta.Series = details.Name
+		meta.SeriesOverview = details.Overview
+		meta.PosterPath = details.PosterPath
+		meta.AirDate = details.FirstAirDate
+		for _, g := range details.Genres {
+			meta.Genres = append(meta.Genres, g.Name)
+		}
+		if details.Credits != nil {
+			for _, cast := range details.Credits.Cast {
+				meta.Cast = append(meta.Cast, cast.Name)
+			}
+		}
+
+		if seasonNum > 0 {
+			meta.Season = seasonNum
+			sDetails, err := c.FetchTVSeason(tmdbID, seasonNum)
+			if err == nil {
+				if episodeNum > 0 {
+					meta.Episode = episodeNum
+					for _, ep := range sDetails.Episodes {
+						if ep.EpisodeNumber == episodeNum {
+							meta.Title = ep.Name
+							meta.EpisodeOverview = ep.Overview
+							meta.Synopsis = ep.Overview
+							meta.StillPath = ep.StillPath
+							meta.AirDate = ep.AirDate
+							break
+						}
+					}
+				} else {
+					meta.Title = sDetails.Name
+					meta.Synopsis = sDetails.Overview
+				}
+			}
+		} else {
+			meta.Title = details.Name
+			meta.Synopsis = details.Overview
+		}
+	} else {
+		details, err := c.FetchMovieDetails(tmdbID)
+		if err != nil {
+			return nil, err
+		}
+		meta.Title = details.Title
+		meta.Synopsis = details.Overview
+		meta.AirDate = details.ReleaseDate
+		meta.PosterPath = details.PosterPath
+		for _, g := range details.Genres {
+			meta.Genres = append(meta.Genres, g.Name)
+		}
+		if details.Credits != nil {
+			for _, cast := range details.Credits.Cast {
+				meta.Cast = append(meta.Cast, cast.Name)
+			}
+			for _, crew := range details.Credits.Crew {
+				if crew.Job == "Director" {
+					meta.Director = crew.Name
+					break
+				}
+			}
+		}
+	}
+
+	return meta, nil
 }
 
 func DownloadPoster(imageURL, targetDir, name string) (string, error) {
