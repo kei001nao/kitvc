@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 
+	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -29,15 +30,17 @@ type videoEditFieldKind int
 const (
 	videoFieldInput videoEditFieldKind = iota
 	videoFieldSelect
+	videoFieldTextArea
 )
 
 type videoEditField struct {
-	Label   string
-	Kind    videoEditFieldKind
-	Input   textinput.Model
-	Select  int
-	Options []string
-	Height  int
+	Label    string
+	Kind     videoEditFieldKind
+	Input    textinput.Model
+	TextArea textarea.Model
+	Select   int
+	Options  []string
+	Height   int
 }
 
 var videoTypeOptions = []string{"Movie", "TV Show", "Music Video"}
@@ -66,6 +69,18 @@ func newVideoEditModal(filename string, labels []string, fieldKinds []videoEditF
 			ti.SetWidth(40)
 			fields[i] = f
 			fields[i].Input = ti
+		case videoFieldTextArea:
+			ta := textarea.New()
+			ta.Placeholder = labels[i]
+			if i < len(initialValues) {
+				ta.SetValue(initialValues[i])
+			}
+			ta.CharLimit = 2000
+			ta.SetHeight(f.Height)
+			ta.SetWidth(40)
+			ta.ShowLineNumbers = false
+			fields[i] = f
+			fields[i].TextArea = ta
 		case videoFieldSelect:
 			f.Options = options[i]
 			f.Select = 0
@@ -135,6 +150,10 @@ func (m *videoEditModal) Update(msg tea.Msg) (*videoEditModal, tea.Cmd) {
 			var cmd tea.Cmd
 			f.Input, cmd = f.Input.Update(msg)
 			return m, cmd
+		case videoFieldTextArea:
+			var cmd tea.Cmd
+			f.TextArea, cmd = f.TextArea.Update(msg)
+			return m, cmd
 		case videoFieldSelect:
 			if keyMsg, ok := msg.(tea.KeyMsg); ok {
 				switch keyMsg.String() {
@@ -180,6 +199,8 @@ func (m *videoEditModal) scrollToFocused() {
 func (m *videoEditModal) nextField() {
 	if m.fields[m.focusIndex].Kind == videoFieldInput {
 		m.fields[m.focusIndex].Input.Blur()
+	} else if m.fields[m.focusIndex].Kind == videoFieldTextArea {
+		m.fields[m.focusIndex].TextArea.Blur()
 	}
 	m.focusIndex++
 	if m.focusIndex >= len(m.fields) {
@@ -187,6 +208,8 @@ func (m *videoEditModal) nextField() {
 	}
 	if m.fields[m.focusIndex].Kind == videoFieldInput {
 		m.fields[m.focusIndex].Input.Focus()
+	} else if m.fields[m.focusIndex].Kind == videoFieldTextArea {
+		m.fields[m.focusIndex].TextArea.Focus()
 	}
 	m.scrollToFocused()
 }
@@ -194,6 +217,8 @@ func (m *videoEditModal) nextField() {
 func (m *videoEditModal) prevField() {
 	if m.fields[m.focusIndex].Kind == videoFieldInput {
 		m.fields[m.focusIndex].Input.Blur()
+	} else if m.fields[m.focusIndex].Kind == videoFieldTextArea {
+		m.fields[m.focusIndex].TextArea.Blur()
 	}
 	m.focusIndex--
 	if m.focusIndex < 0 {
@@ -201,6 +226,8 @@ func (m *videoEditModal) prevField() {
 	}
 	if m.fields[m.focusIndex].Kind == videoFieldInput {
 		m.fields[m.focusIndex].Input.Focus()
+	} else if m.fields[m.focusIndex].Kind == videoFieldTextArea {
+		m.fields[m.focusIndex].TextArea.Focus()
 	}
 	m.scrollToFocused()
 }
@@ -317,6 +344,12 @@ func (m *videoEditModal) View() string {
 			} else {
 				fieldLines = append(fieldLines, f.Input.View())
 			}
+		case videoFieldTextArea:
+			f.TextArea.SetWidth(fieldsW - 2)
+			f.TextArea.SetHeight(f.Height)
+			taView := f.TextArea.View()
+			lines := strings.Split(taView, "\n")
+			fieldLines = append(fieldLines, lines...)
 		case videoFieldSelect:
 			var opts []string
 			for j, opt := range f.Options {
@@ -375,6 +408,8 @@ func (m *videoEditModal) Values() []string {
 		switch f.Kind {
 		case videoFieldInput:
 			values[i] = strings.TrimSpace(f.Input.Value())
+		case videoFieldTextArea:
+			values[i] = strings.TrimSpace(f.TextArea.Value())
 		case videoFieldSelect:
 			values[i] = f.Options[f.Select]
 		}

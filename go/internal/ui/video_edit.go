@@ -18,18 +18,18 @@ var videoEditFieldNames = []string{
 }
 
 var videoEditFieldKinds = []videoEditFieldKind{
-	videoFieldSelect, // Type
-	videoFieldInput,  // Category
-	videoFieldInput,  // SubCategory
-	videoFieldInput,  // Genres
-	videoFieldInput,  // Title
-	videoFieldInput,  // Series
-	videoFieldInput,  // Season
-	videoFieldInput,  // Episode
-	videoFieldInput,  // Date
-	videoFieldInput,  // Series Overview
-	videoFieldInput,  // Synopsis
-	videoFieldInput,  // Episode Overview
+	videoFieldSelect,   // Type
+	videoFieldInput,    // Category
+	videoFieldInput,    // SubCategory
+	videoFieldInput,    // Genres
+	videoFieldInput,    // Title
+	videoFieldInput,    // Series
+	videoFieldInput,    // Season
+	videoFieldInput,    // Episode
+	videoFieldInput,    // Date
+	videoFieldTextArea, // Series Overview
+	videoFieldTextArea, // Synopsis
+	videoFieldTextArea, // Episode Overview
 }
 
 var videoEditOptions = [][]string{
