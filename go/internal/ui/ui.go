@@ -1814,8 +1814,11 @@ func (m *model) applyTMDBMetadata(meta *tmdb.VideoMetadata) {
 	
 	m.videoEdit.fields[8].Input.SetValue(meta.AirDate)
 	m.videoEdit.fields[9].TextArea.SetValue(meta.SeriesOverview)
+	m.videoEdit.fields[9].TextArea.MoveToBegin()
 	m.videoEdit.fields[10].TextArea.SetValue(meta.Synopsis)
+	m.videoEdit.fields[10].TextArea.MoveToBegin()
 	m.videoEdit.fields[11].TextArea.SetValue(meta.EpisodeOverview)
+	m.videoEdit.fields[11].TextArea.MoveToBegin()
 	
 	if len(meta.Genres) > 0 {
 		m.videoEdit.fields[3].Input.SetValue(strings.Join(meta.Genres, ", "))

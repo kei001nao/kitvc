@@ -74,6 +74,7 @@ func newVideoEditModal(filename string, labels []string, fieldKinds []videoEditF
 			ta.Placeholder = labels[i]
 			if i < len(initialValues) {
 				ta.SetValue(initialValues[i])
+				ta.MoveToBegin()
 			}
 			ta.CharLimit = 2000
 			ta.SetHeight(f.Height)
