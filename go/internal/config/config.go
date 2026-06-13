@@ -57,6 +57,14 @@ func GetConfigDir() (string, error) {
 	return filepath.Join(home, ".config", "kitvc"), nil
 }
 
+func GetCacheDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".cache", "kitvc"), nil
+}
+
 func LoadConfig() (*Config, error) {
 	configDir, err := GetConfigDir()
 	if err != nil {

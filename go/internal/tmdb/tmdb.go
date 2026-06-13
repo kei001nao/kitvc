@@ -44,11 +44,12 @@ type TVDetails struct {
 }
 
 type SeasonDetails struct {
-	ID          int             `json:"id"`
-	Name        string          `json:"name"`
-	Overview    string          `json:"overview"`
-	SeasonNumber int            `json:"season_number"`
-	Episodes    []EpisodeDetail `json:"episodes"`
+	ID           int             `json:"id"`
+	Name         string          `json:"name"`
+	Overview     string          `json:"overview"`
+	PosterPath   string          `json:"poster_path"`
+	SeasonNumber int             `json:"season_number"`
+	Episodes     []EpisodeDetail `json:"episodes"`
 }
 
 type EpisodeDetail struct {
@@ -104,6 +105,7 @@ type SeasonInfo struct {
 	ID           int    `json:"id"`
 	Name         string `json:"name"`
 	Overview     string `json:"overview"`
+	PosterPath   string `json:"poster_path"`
 	SeasonNumber int    `json:"season_number"`
 	EpisodeCount int    `json:"episode_count"`
 	AirDate      string `json:"air_date"`
@@ -346,4 +348,12 @@ func DownloadPoster(imageURL, targetDir, name string) (string, error) {
 
 	_, err = io.Copy(f, resp.Body)
 	return targetPath, err
+}
+
+func (c *Client) DownloadSearchPoster(item SearchItem, targetDir string) (string, error) {
+	if item.PosterPath == "" {
+		return "", fmt.Errorf("no poster path")
+	}
+	name := fmt.Sprintf("tmdb_%d", item.ID)
+	return DownloadPoster(item.PosterPath, targetDir, name)
 }
