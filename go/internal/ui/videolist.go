@@ -3,10 +3,12 @@ package ui
 import (
 	"fmt"
 	"kitvc/internal/db"
+	"log"
 
 	"github.com/evertras/bubble-table/table"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/mattn/go-runewidth"
 )
 
 const (
@@ -41,11 +43,11 @@ func newVideoListFromVideos(width, height int, videos []db.VideoData) videoList 
 }
 
 func (vl videoList) buildTable(width, height int, videos []db.VideoData) table.Model {
-	cols := vl.buildColumns(width)
+	cols, w := vl.buildColumns(width)
 
 	rows := make([]table.Row, len(videos))
 	for i, v := range videos {
-		rows[i] = vl.videoRow(v, "")
+		rows[i] = vl.videoRow(v, "", w)
 	}
 
 	headerStyle := lipgloss.NewStyle().
@@ -73,7 +75,7 @@ func (vl videoList) buildTable(width, height int, videos []db.VideoData) table.M
 	return t
 }
 
-func (vl videoList) buildColumns(width int) []table.Column {
+func (vl videoList) buildColumns(width int) ([]table.Column, map[string]int) {
 	leftAlign := lipgloss.NewStyle().Align(lipgloss.Left)
 	specs := []colSpec{
 		{videoColMark, "M", 1, 1, 0, false},
@@ -86,15 +88,23 @@ func (vl videoList) buildColumns(width int) []table.Column {
 		{videoColTitle, "Title", 12, 28, 2, true},
 		{videoColDate, "Date", 10, 10, 0, true},
 		{videoColDuration, "Duration", 8, 8, 0, false},
-		{videoColFilename, "Filename", 40, 58, 1, true},
+		{videoColFilename, "Filename", 40, 0, 1, true},
 	}
 	dividers := len(specs) - 1
-	colWidth := width - dividers
+	colWidth := width - dividers - 2
 	if colWidth < 0 {
 		colWidth = 0
 	}
 	w := calcColWidths(specs, colWidth)
-	return []table.Column{
+
+	log.Printf("[DEBUGLOG] buildColumns width=%d, dividers=%d, colWidth=%d", width, dividers, colWidth)
+	for _, spec := range specs {
+		log.Printf("[DEBUGLOG] Spec: key=%s, min=%d, max=%d, flex=%d", spec.key, spec.min, spec.max, spec.flex)
+	}
+	for k, val := range w {
+		log.Printf("[DEBUGLOG] Width for %s = %d", k, val)
+	}
+	cols := []table.Column{
 		table.NewColumn(videoColMark, "M", w[videoColMark]),
 		table.NewColumn(videoColType, "Type", w[videoColType]).WithStyle(leftAlign),
 		table.NewColumn(videoColCategory, "Category", w[videoColCategory]).WithStyle(leftAlign),
@@ -107,28 +117,26 @@ func (vl videoList) buildColumns(width int) []table.Column {
 		table.NewColumn(videoColDuration, "Duration", w[videoColDuration]),
 		table.NewColumn(videoColFilename, "Filename", w[videoColFilename]).WithStyle(leftAlign),
 	}
+	return cols, w
 }
 
 func limitStr(s string, max int) string {
-	if len([]rune(s)) > max {
-		return string([]rune(s)[:max-1]) + "~"
-	}
-	return s
+	return runewidth.Truncate(s, max, "~")
 }
 
-func (vl videoList) videoRow(v db.VideoData, mark string) table.Row {
+func (vl videoList) videoRow(v db.VideoData, mark string, w map[string]int) table.Row {
 	return table.NewRow(table.RowData{
 		videoColMark:     mark,
-		videoColType:     limitStr(v.Type, 7),
-		videoColCategory: limitStr(v.Category, 8),
-		videoColSubCat:   limitStr(v.Subcategory, 8),
-		videoColSeries:   limitStr(v.Series, 28),
+		videoColType:     limitStr(v.Type, w[videoColType]),
+		videoColCategory: limitStr(v.Category, w[videoColCategory]),
+		videoColSubCat:   limitStr(v.Subcategory, w[videoColSubCat]),
+		videoColSeries:   limitStr(v.Series, w[videoColSeries]),
 		videoColSeason:   fmt.Sprintf("%d", v.Season),
 		videoColEpisode:  fmt.Sprintf("%d", v.Episode),
-		videoColTitle:    limitStr(v.Title, 28),
-		videoColDate:     limitStr(v.AirDate, 10),
+		videoColTitle:    limitStr(v.Title, w[videoColTitle]),
+		videoColDate:     limitStr(v.AirDate, w[videoColDate]),
 		videoColDuration: formatDuration(v.Duration),
-		videoColFilename: v.Filename,
+		videoColFilename: limitStr(v.Filename, w[videoColFilename]),
 	})
 }
 
@@ -146,9 +154,23 @@ func (vl *videoList) SetSize(w, h int) {
 	if w <= 0 {
 		w = 1
 	}
-	cols := vl.buildColumns(w)
+	cols, colWidths := vl.buildColumns(w)
+	
+	currentRows := vl.table.GetVisibleRows()
+	rows := make([]table.Row, len(vl.videos))
+	for i, v := range vl.videos {
+		mark := ""
+		if i < len(currentRows) {
+			if m, ok := currentRows[i].Data[videoColMark].(string); ok {
+				mark = m
+			}
+		}
+		rows[i] = vl.videoRow(v, mark, colWidths)
+	}
+
 	vl.table = vl.table.
 		WithColumns(cols).
+		WithRows(rows).
 		WithMaxTotalWidth(w).
 		WithTargetHeight(h - 4)
 }
@@ -188,6 +210,16 @@ func (vl *videoList) UpdatePlaybackStatus(currentPath string, isPaused bool) {
 
 func (vl *videoList) ClearMarks() {
 	vl.marked = make(map[int]bool)
+}
+
+func (vl *videoList) MarkedVideos() []db.VideoData {
+	var videos []db.VideoData
+	for i, marked := range vl.marked {
+		if marked && i >= 0 && i < len(vl.videos) {
+			videos = append(videos, vl.videos[i])
+		}
+	}
+	return videos
 }
 
 func (vl *videoList) MarkedPaths() []string {

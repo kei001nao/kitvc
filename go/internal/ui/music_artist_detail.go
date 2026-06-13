@@ -93,18 +93,18 @@ func newMusicArtistDetail(width, height int, artist string, albums []db.Album) m
 func buildAlbumCols(width int) []table.Column {
 	leftAlign := lipgloss.NewStyle().Align(lipgloss.Left)
 	specs := []colSpec{
+		{albumColTitle, "Album", 30, 50, 1, true},
 		{albumColDate, "Date", 10, 10, 0, true},
-		{albumColTitle, "Album", 15, 25, 1, true},
 	}
 	dividers := len(specs) - 1
-	colWidth := width - dividers
+	colWidth := width - dividers - 2
 	if colWidth < 0 {
 		colWidth = 0
 	}
 	w := calcColWidths(specs, colWidth)
 	return []table.Column{
-		table.NewColumn(albumColDate, "Date", w[albumColDate]).WithStyle(leftAlign),
 		table.NewColumn(albumColTitle, "Album", w[albumColTitle]).WithStyle(leftAlign),
+		table.NewColumn(albumColDate, "Date", w[albumColDate]).WithStyle(leftAlign),
 	}
 }
 

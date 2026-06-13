@@ -505,7 +505,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						_, albums, err := db.GetMusicArtistsAndAlbums()
 						if err == nil {
 							sbWidth := m.getSidebarWidth()
-							m.artistDetail = newMusicArtistDetail(m.width-sbWidth-1, m.height-8, selectedArtist, albums[selectedArtist])
+							m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-8, selectedArtist, albums[selectedArtist])
 							m.focusedSide = false
 							m.syncFocus()
 						}
@@ -805,10 +805,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if videoViews[m.activeView] {
 					markedPaths := m.videoList.MarkedPaths()
 					if len(markedPaths) > 0 {
+						markedVideos := m.videoList.MarkedVideos()
 						m.editVideoPaths = markedPaths
 						m.editVideoFieldNames = videoEditFieldNames
 						m.pendingAction = actionBatchEditVideo
-						initialValues := videoBatchEditInitialValues()
+						initialValues := videoBatchEditInitialValues(markedVideos)
 						m.videoEdit = newVideoEditModal("Batch Edit", videoEditLabels, videoEditFieldKinds, initialValues, videoEditOptions)
 						m.videoEdit.SetSize(m.width, m.height)
 					} else {
@@ -1017,15 +1018,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		sbWidth := m.getSidebarWidth()
 		m.sidebar.SetSize(sbWidth, m.height-8)
 
-		mainWidth := m.width - sbWidth - 1
+		mainWidth := m.width - sbWidth - 2
 		if mainWidth <= 0 {
 			mainWidth = 1
 		}
 
-		m.trackList.SetSize(mainWidth, m.height-8)
-		m.videoList.SetSize(mainWidth, m.height-8)
-		m.musicArtists.SetSize(mainWidth, m.height-8)
-		m.artistDetail.SetSize(mainWidth, m.height-8)
+		m.trackList.SetSize(mainWidth-1, m.height-8)
+		m.videoList.SetSize(mainWidth-1, m.height-8)
+		m.musicArtists.SetSize(mainWidth-1, m.height-8)
+		m.artistDetail.SetSize(mainWidth-1, m.height-8)
 		if m.modal != nil {
 			m.modal.SetSize(m.width, m.height)
 		}
@@ -1234,7 +1235,7 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 		artists, _, err := db.GetMusicArtistsAndAlbums()
 		if err == nil {
 			sbWidth := m.getSidebarWidth()
-			m.musicArtists = newMusicArtists(m.width-sbWidth-1, m.height-8, artists)
+			m.musicArtists = newMusicArtists(m.width-sbWidth-3, m.height-8, artists)
 		}
 	case n.id == "music_recent":
 		m.activeView = viewMusicRecent
@@ -1257,7 +1258,7 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 		_, albums, err := db.GetMusicArtistsAndAlbums()
 		if err == nil {
 			sbWidth := m.getSidebarWidth()
-			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-1, m.height-8, artist, albums[artist])
+			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-8, artist, albums[artist])
 		}
 	case strings.HasPrefix(n.id, "album:"):
 		artist, albumTitle := m.getCurrentFilter()
@@ -1330,7 +1331,7 @@ func (m *model) getSidebarWidth() int {
 func (m *model) refreshVideoPlaylistFiles(playlistID int64) {
 	sbWidth := m.getSidebarWidth()
 	videos, _ := db.GetVideoPlaylistFiles(playlistID)
-	m.videoList = newVideoListFromVideos(m.width-sbWidth-1, m.height-6, videos)
+	m.videoList = newVideoListFromVideos(m.width-sbWidth-3, m.height-6, videos)
 	m.syncFocus()
 }
 
@@ -1338,7 +1339,7 @@ func (m *model) refreshPlaylistTracks(playlistID int64) {
 	sbWidth := m.getSidebarWidth()
 	tracks, _ := db.GetMusicPlaylistTracks(playlistID)
 	oldMarked := m.trackList.marked
-	m.trackList = newTrackListFromTracks(m.width-sbWidth-1, m.height-6, tracks)
+	m.trackList = newTrackListFromTracks(m.width-sbWidth-3, m.height-6, tracks)
 	m.trackList.marked = oldMarked
 	if m.trackList.marked == nil {
 		m.trackList.marked = make(map[int]bool)
@@ -1387,14 +1388,14 @@ func (m model) getCurrentFilter() (string, string) {
 
 func (m *model) refreshTrackList(artist, albumTitle string) {
 	sbWidth := m.getSidebarWidth()
-	m.trackList = newTrackList(m.width-sbWidth-1, m.height-6, artist, albumTitle)
+	m.trackList = newTrackList(m.width-sbWidth-3, m.height-6, artist, albumTitle)
 	m.syncFocus()
 }
 
 func (m *model) refreshRecentTracks() {
 	sbWidth := m.getSidebarWidth()
 	tracks, _ := db.GetRecentMusicTracks(50)
-	m.trackList = newTrackListFromTracks(m.width-sbWidth-1, m.height-6, tracks)
+	m.trackList = newTrackListFromTracks(m.width-sbWidth-3, m.height-6, tracks)
 	m.syncFocus()
 }
 
@@ -1402,12 +1403,12 @@ func (m *model) refreshFilterTracks(filterID int64) {
 	sbWidth := m.getSidebarWidth()
 	filter, err := db.GetMusicFilterByID(filterID)
 	if err != nil {
-		m.trackList = newTrackListFromTracks(m.width-sbWidth-1, m.height-6, nil)
+		m.trackList = newTrackListFromTracks(m.width-sbWidth-3, m.height-6, nil)
 		m.syncFocus()
 		return
 	}
 	tracks, _ := db.GetFilteredMusicTracks(filter.ConditionsJSON, filter.SortJSON)
-	m.trackList = newTrackListFromTracks(m.width-sbWidth-1, m.height-6, tracks)
+	m.trackList = newTrackListFromTracks(m.width-sbWidth-3, m.height-6, tracks)
 	m.syncFocus()
 }
 
@@ -1415,12 +1416,12 @@ func (m *model) refreshVideoFilterTracks(filterID int64) {
 	sbWidth := m.getSidebarWidth()
 	filter, err := db.GetVideoFilterByID(filterID)
 	if err != nil {
-		m.videoList = newVideoListFromVideos(m.width-sbWidth-1, m.height-6, nil)
+		m.videoList = newVideoListFromVideos(m.width-sbWidth-3, m.height-6, nil)
 		m.syncFocus()
 		return
 	}
 	videos, _ := db.GetFilteredVideos(filter.ConditionsJSON, filter.SortJSON)
-	m.videoList = newVideoListFromVideos(m.width-sbWidth-1, m.height-6, videos)
+	m.videoList = newVideoListFromVideos(m.width-sbWidth-3, m.height-6, videos)
 	m.syncFocus()
 }
 
@@ -1525,7 +1526,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 			trackCursor := m.artistDetail.tracksTable.GetHighlightedRowIndex()
 			wasFocusedUpper := m.artistDetail.focusedUpper
 			wasFocused := m.focusedSide
-			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-1, m.height-8, m.artistDetail.artist, m.artistDetail.albums)
+			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-8, m.artistDetail.artist, m.artistDetail.albums)
 			if albumCursor >= 0 && albumCursor < len(m.artistDetail.albums) {
 				m.artistDetail.albumsTable = m.artistDetail.albumsTable.WithHighlightedRow(albumCursor)
 				m.artistDetail.loadTracksForAlbum(m.artistDetail.albums[albumCursor].Title)
@@ -1752,28 +1753,28 @@ func (m *model) loadUIState() {
 
 func (m *model) refreshVideoList() {
 	sbWidth := m.getSidebarWidth()
-	m.videoList = newVideoList(m.width-sbWidth-1, m.height-6)
+	m.videoList = newVideoList(m.width-sbWidth-3, m.height-6)
 	m.syncFocus()
 }
 
 func (m *model) refreshVideoContinue() {
 	sbWidth := m.getSidebarWidth()
 	videos, _ := db.GetContinueWatchingVideos()
-	m.videoList = newVideoListFromVideos(m.width-sbWidth-1, m.height-6, videos)
+	m.videoList = newVideoListFromVideos(m.width-sbWidth-3, m.height-6, videos)
 	m.syncFocus()
 }
 
 func (m *model) refreshVideoRecent() {
 	sbWidth := m.getSidebarWidth()
 	videos, _ := db.GetRecentlyAddedVideos()
-	m.videoList = newVideoListFromVideos(m.width-sbWidth-1, m.height-6, videos)
+	m.videoList = newVideoListFromVideos(m.width-sbWidth-3, m.height-6, videos)
 	m.syncFocus()
 }
 
 func (m *model) refreshVideoHealth() {
 	sbWidth := m.getSidebarWidth()
 	videos, _ := db.GetUnhealthyVideos()
-	m.videoList = newVideoListFromVideos(m.width-sbWidth-1, m.height-6, videos)
+	m.videoList = newVideoListFromVideos(m.width-sbWidth-3, m.height-6, videos)
 	m.syncFocus()
 }
 
@@ -1928,7 +1929,7 @@ func (m model) View() tea.View {
 	sbView := m.sidebar.View(m.focusedSide)
 	sbWidth := m.getSidebarWidth()
 
-	mainWidth := m.width - sbWidth - 1
+	mainWidth := m.width - sbWidth - 2
 	if mainWidth <= 0 {
 		mainWidth = 1
 	}
@@ -1954,15 +1955,7 @@ func (m model) View() tea.View {
 		mainContentStr = m.musicArtists.View()
 	case viewMusicArtistDetail:
 		mainContentStr = m.artistDetail.View()
-	case viewVideoLibrary:
-		mainContentStr = m.videoList.View()
-	case viewVideoFilter:
-		mainContentStr = m.videoList.View()
-	case viewVideoContinue:
-		mainContentStr = m.videoList.View()
-	case viewVideoRecent:
-		mainContentStr = m.videoList.View()
-	case viewVideoHealth:
+	case viewVideoLibrary, viewVideoContinue, viewVideoRecent, viewVideoFilter, viewVideoHealth:
 		mainContentStr = m.videoList.View()
 	default:
 		mainContentStr = "Unknown View"
@@ -1976,7 +1969,7 @@ func (m model) View() tea.View {
 		footer,
 	)
 
-	if m.modal.Active() {
+	if m.modal != nil && m.modal.Active() {
 		m.modal.SetSize(m.width, m.height)
 		overlay := m.modal.View()
 		contentArea := lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr))
@@ -1995,7 +1988,6 @@ func (m model) View() tea.View {
 				startRow = 0
 			}
 
-			// find dialog visual width for centering
 			dialogW := 0
 			for _, line := range dialogLines {
 				if w := lipgloss.Width(line); w > dialogW {
@@ -2199,7 +2191,7 @@ func (m model) View() tea.View {
 func (m model) renderHeader() string {
 	if m.currentTrack == "" {
 		return lipgloss.NewStyle().
-			Width(m.width).
+			Width(m.width - 5).
 			Height(3).
 			Border(lipgloss.NormalBorder(), false, false, true, false).
 			BorderForeground(lipgloss.Color("240")).
@@ -2211,10 +2203,10 @@ func (m model) renderHeader() string {
 	if m.duration > 0 {
 		percent = m.playbackPos / m.duration
 	}
-	
+
 	progressStr := m.progress.ViewAs(percent)
 	timeStr := fmt.Sprintf("%s / %s", formatDuration(int(m.playbackPos)), formatDuration(int(m.duration)))
-	
+
 	volStr := fmt.Sprintf("Vol: %d%%", int(m.volume))
 
 	availWidth := m.width - 4
@@ -2246,7 +2238,7 @@ func (m model) renderHeader() string {
 	)
 
 	return lipgloss.NewStyle().
-		Width(m.width).
+		Width(m.width - 5).
 		Height(3).
 		Border(lipgloss.NormalBorder(), false, false, true, false).
 		BorderForeground(lipgloss.Color("240")).
@@ -2282,7 +2274,7 @@ func (m model) renderFooter() string {
 	helpStr := strings.Join(helpParts, "  ")
 
 	return lipgloss.NewStyle().
-		Width(m.width).
+		Width(m.width - 5).
 		Border(lipgloss.NormalBorder(), true, false, false, false).
 		BorderForeground(lipgloss.Color("240")).
 		Padding(0, 2).

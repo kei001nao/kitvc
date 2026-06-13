@@ -64,6 +64,27 @@ func videoEditInitialValues(v db.VideoData) []string {
 	}
 }
 
-func videoBatchEditInitialValues() []string {
-	return make([]string, len(videoEditLabels))
+func videoBatchEditInitialValues(videos []db.VideoData) []string {
+	if len(videos) == 0 {
+		return make([]string, len(videoEditLabels))
+	}
+
+	res := make([]string, len(videoEditLabels))
+	first := videoEditInitialValues(videos[0])
+
+	for i := range videoEditLabels {
+		common := true
+		val := first[i]
+		for j := 1; j < len(videos); j++ {
+			current := videoEditInitialValues(videos[j])
+			if current[i] != val {
+				common = false
+				break
+			}
+		}
+		if common {
+			res[i] = val
+		}
+	}
+	return res
 }
