@@ -29,7 +29,6 @@ type videoEditModal struct {
 	posterRows       int
 	overlayStartLine int
 	overlayStartCol  int
-	ps               posterState
 }
 
 type videoEditFieldKind int
@@ -115,8 +114,9 @@ func newVideoEditModal(filename string, labels []string, fieldKinds []videoEditF
 		filename:        filename,
 		posterCols:      12,
 		posterRows:      8,
-		overlayStartLine: -1,
-		ps:              newPosterState(),
+	}
+	if len(initialValues) > 12 {
+		m.posterPath = initialValues[12]
 	}
 	return m
 }
@@ -240,16 +240,10 @@ func (m *videoEditModal) scrollToFocused() {
 
 	fieldH := 1 + m.fields[m.focusIndex].Height
 
-	if y+fieldH > m.viewport.YOffset()+vpH {
-		// Scroll down: show focused field near top with 1 line padding
-		pad := 1
-		if y < pad {
-			pad = y
-		}
-		m.viewport.SetYOffset(y - pad)
-	} else if y < m.viewport.YOffset() {
-		// Scroll up: show focused field at top of viewport
+	if y < m.viewport.YOffset() {
 		m.viewport.SetYOffset(y)
+	} else if y+fieldH > m.viewport.YOffset()+vpH {
+		m.viewport.SetYOffset(y + fieldH - vpH + 1)
 	}
 }
 
