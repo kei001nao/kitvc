@@ -54,6 +54,7 @@ type videoFetchModal struct {
 	lastEpisodeIdx   int
 	overlayStartLine int
 	overlayStartCol  int
+	ps               posterState
 
 	SelectedID      int
 	SelectedIsTV    bool
@@ -92,6 +93,7 @@ func newVideoFetchModal(apiKey, query string, isTV bool, initialSeason, initialE
 		lastPosterIdx:  -1,
 		lastSeasonIdx:  -1,
 		lastEpisodeIdx: -1,
+		ps:             newPosterState(),
 	}
 	
 	m.initTables()
