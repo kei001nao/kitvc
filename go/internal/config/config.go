@@ -106,3 +106,17 @@ func DefaultConfig() *Config {
 		},
 	}
 }
+
+func SaveConfig(cfg *Config) error {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return err
+	}
+	configPath := filepath.Join(configDir, "config.toml")
+	f, err := os.Create(configPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
+}

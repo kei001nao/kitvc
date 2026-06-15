@@ -128,14 +128,18 @@ func InitialModel(cfg *config.Config) model {
 	// Socket path for mpv IPC
 	socketPath := fmt.Sprintf("/tmp/kitvc-mpv-%d.sock", os.Getpid())
 	p := player.NewMpvPlayer(socketPath, cfg.Player.MpvArgs)
+	vol := float64(cfg.Player.Volume)
 	if err := p.Start(); err != nil {
 		// We still create the model, but player will be disconnected
 		log.Printf("Warning: failed to start mpv: %v", err)
+	} else {
+		p.SetProperty("volume", vol)
 	}
 
 	return model{
 		config:      cfg,
 		player:      p,
+		volume:      vol,
 		progress:    progress.New(progress.WithDefaultBlend()),
 		focusedSide: true,
 		activeView:  viewMusicLibrary,
@@ -166,10 +170,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, id := range msg.state.ExpandedNodes {
 			m.sidebar.ExpandByID(id)
 		}
+		var cmds []tea.Cmd
 		if msg.state.SelectedNode != "" {
 			m.sidebar.SelectByID(msg.state.SelectedNode)
 			if n := m.sidebar.SelectedNode(); n != nil {
-				m.handleSidebarChange(n)
+				if cmd := m.handleSidebarChange(n); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 			}
 		}
 		m.focusedSide = msg.state.FocusedSide
@@ -177,7 +184,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeView = v
 		}
 		m.syncFocus()
-		return m, nil
+		if cmd := m.videoFocusCoverCmd(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	switch msg := msg.(type) {
@@ -556,7 +566,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab":
 			m.focusedSide = !m.focusedSide
 			m.syncFocus()
-			return m, nil
+			return m, m.videoFocusCoverCmd()
 		case "left":
 			if !m.focusedSide && m.player != nil && m.player.IsRunning() {
 				m.player.Seek(-5)
@@ -584,6 +594,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.volume < 0 {
 					m.volume = 0
 				}
+				m.config.Player.Volume = int(m.volume)
+				config.SaveConfig(m.config)
 			}
 			return m, nil
 		case "0":
@@ -593,6 +605,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.volume > 100 {
 					m.volume = 100
 				}
+				m.config.Player.Volume = int(m.volume)
+				config.SaveConfig(m.config)
 			}
 			return m, nil
 		case "s":
@@ -605,7 +619,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focusedSide {
 				m.focusedSide = false
 				m.syncFocus()
-				return m, nil
+				return m, m.videoFocusCoverCmd()
 			} else {
 				if m.activeView == viewMusicLibrary {
 					selected := m.trackList.table.HighlightedRow()
@@ -1193,7 +1207,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.modal != nil {
 			m.modal.SetSize(m.width, m.height)
 		}
-		return m, tea.Batch(m.coverPlaceCmd(), m.syncPosterCmd(), m.syncVideoEditPosterCmd())
+		var cmds []tea.Cmd
+		if m.sidebar.HasCover() {
+			// Refresh cover with new window dimensions
+			path := m.sidebar.CoverPath()
+			sbWidth := m.getSidebarWidth()
+			cols := sbWidth - 2
+			maxRows := (m.height - 5) - 5
+			m.sidebar.SetCoverPath(path, cols, maxRows)
+		} else if !m.focusedSide {
+			isVideoView := m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter ||
+				m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth
+			if isVideoView {
+				cmds = append(cmds, m.videoFocusCoverCmd())
+			}
+		}
+		cmds = append(cmds, m.coverPlaceCmd(), m.syncPosterCmd(), m.syncVideoEditPosterCmd())
+		return m, tea.Batch(cmds...)
 	case tickMsg:
 		if m.player != nil {
 			if !m.player.IsRunning() {
@@ -1304,6 +1334,20 @@ func (m *model) syncFocus() {
 	} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
 		m.videoList.SetFocus(!m.focusedSide)
 	}
+}
+
+func (m *model) videoFocusCoverCmd() tea.Cmd {
+	if m.focusedSide {
+		return nil
+	}
+	switch m.activeView {
+	case viewVideoLibrary, viewVideoFilter, viewVideoContinue, viewVideoRecent, viewVideoHealth:
+		idx := m.videoList.table.GetHighlightedRowIndex()
+		if idx >= 0 && idx < len(m.videoList.videos) {
+			return m.updateCoverForVideo(m.videoList.videos[idx].Path)
+		}
+	}
+	return nil
 }
 
 func (m *model) updateCoverForAlbumID(albumID int64) tea.Cmd {
@@ -2577,13 +2621,14 @@ func (m model) isAnyInputFocused() bool {
 
 func (m model) renderHeader() string {
 	if m.currentTrack == "" {
+		volStr := fmt.Sprintf("Vol: %d%%", int(m.volume))
 		return lipgloss.NewStyle().
 			Width(m.width - 5).
 			Height(3).
 			Border(lipgloss.NormalBorder(), false, false, true, false).
 			BorderForeground(lipgloss.Color("240")).
 			Padding(0, 2).
-			Render("Nothing playing")
+			Render("Nothing playing  |  " + volStr)
 	}
 
 	percent := 0.0

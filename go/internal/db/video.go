@@ -442,6 +442,7 @@ func GetRecentlyAddedVideos() ([]VideoData, error) {
 			COALESCE(thumbnail_path, ''), COALESCE(poster_path, ''), COALESCE(local_poster_path, '')
 		FROM video_files
 		ORDER BY created_at DESC
+		LIMIT 50
 	`)
 	if err != nil {
 		return nil, err
