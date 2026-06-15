@@ -177,32 +177,32 @@ func GetVideoPlaylistFiles(playlistID int64) ([]VideoData, error) {
 			COALESCE(v.title, ''), COALESCE(v.air_date, ''),
 			COALESCE(v.genres, ''), COALESCE(v.synopsis, ''),
 			COALESCE(v.series_overview, ''), COALESCE(v.episode_overview, ''),
-			COALESCE(v.thumbnail_path, '')
-		FROM video_files v
-		JOIN video_playlist_files vpf ON v.path = vpf.file_path
-		WHERE vpf.playlist_id = ?
-		ORDER BY vpf.sort_order
-	`, playlistID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+			COALESCE(v.thumbnail_path, ''), COALESCE(v.poster_path, ''), COALESCE(v.local_poster_path, '')
+			FROM video_files v
+			JOIN video_playlist_files vpf ON v.path = vpf.file_path
+			WHERE vpf.playlist_id = ?
+			ORDER BY vpf.sort_order
+			`, playlistID)
+			if err != nil {
+			return nil, err
+			}
+			defer rows.Close()
 
-	var videos []VideoData
-	for rows.Next() {
-		var v VideoData
-		err := rows.Scan(
+			var videos []VideoData
+			for rows.Next() {
+			var v VideoData
+			err := rows.Scan(
 			&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
 			&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
 			&v.Title, &v.AirDate,
 			&v.Genres, &v.Synopsis, &v.SeriesOverview, &v.EpisodeOverview,
 			&v.ThumbnailPath, &v.PosterPath, &v.LocalPosterPath,
-		)
-		if err != nil {
+			)
+			if err != nil {
 			return nil, err
-		}
-		videos = append(videos, v)
-	}
+			}
+			videos = append(videos, v)
+			}
 	return videos, nil
 }
 
@@ -353,7 +353,7 @@ var videoAllowedFields = map[string]bool{
 	"title": true, "air_date": true, "genres": true,
 	"synopsis": true, "year": true, "cast": true,
 	"director": true, "series_overview": true, "episode_overview": true,
-	"tmdb_id": true, "poster_path": true,
+	"tmdb_id": true, "poster_path": true, "local_poster_path": true,
 }
 
 func UpdateVideoField(path, field, value string) error {

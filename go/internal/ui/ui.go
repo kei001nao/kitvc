@@ -1269,9 +1269,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		} else if m.activeView == viewMusicArtistDetail {
 			var cmd tea.Cmd
+			oldAlbumID, _ := m.artistDetail.SelectedAlbumID()
 			m.artistDetail, cmd = m.artistDetail.Update(msg)
 			cmds = append(cmds, cmd)
-	} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
+
+			newAlbumID, _ := m.artistDetail.SelectedAlbumID()
+			if oldAlbumID != newAlbumID {
+				if coverCmd := m.updateCoverForAlbumID(newAlbumID); coverCmd != nil {
+					cmds = append(cmds, coverCmd)
+				}
+			}
+		} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
 			var cmd tea.Cmd
 			m.videoList, cmd = m.videoList.Update(msg)
 			cmds = append(cmds, cmd)
@@ -1291,6 +1299,22 @@ func (m *model) syncFocus() {
 	} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
 		m.videoList.SetFocus(!m.focusedSide)
 	}
+}
+
+func (m *model) updateCoverForAlbumID(albumID int64) tea.Cmd {
+	coverPath := library.GetCachedCoverPath(albumID)
+	cols := m.getSidebarWidth() - 2
+	if cols < 10 {
+		cols = 10
+	}
+	maxRows := (m.height - 8) - 5
+	if maxRows < 6 {
+		maxRows = 6
+	}
+	if m.sidebar.SetCoverPath(coverPath, cols, maxRows) {
+		return m.coverDisplayCmd()
+	}
+	return nil
 }
 
 func (m *model) updateCoverForNode(n *node) tea.Cmd {
@@ -1932,8 +1956,8 @@ func (m *model) applyTMDBMetadata(meta *tmdb.VideoMetadata) {
 					m.videoEdit.SetPosterPath(localPath)
 					// Update form fields: poster_path (TMDB URL) and local_poster_path (local file)
 					fullPosterURL := "https://image.tmdb.org/t/p/w500" + posterURL
-					m.videoEdit.SetFieldValue(12, fullPosterURL)  // poster_path
-					m.videoEdit.SetFieldValue(13, localPath)       // local_poster_path
+					m.videoEdit.SetFieldValue(12, fullPosterURL) // poster_path
+					m.videoEdit.SetFieldValue(13, localPath)     // local_poster_path
 					log.Printf("Poster saved to: %s, videoEdit.PosterPath()=%s", localPath, m.videoEdit.PosterPath())
 				}
 			}
@@ -1949,24 +1973,10 @@ func (m model) handleVideoEditSubmit(values []string) model {
 			break
 		}
 		val := values[i]
-		if val == "" {
-			continue
-		}
-
+		// In Go version, we allow empty strings to clear fields
 		for _, path := range m.editVideoPaths {
 			if err := db.UpdateVideoField(path, field, val); err != nil {
-				log.Printf("Failed to update video %s: %v", path, err)
-			}
-		}
-	}
-
-	if m.videoEdit != nil {
-		posterPath := m.videoEdit.PosterPath()
-		if posterPath != "" {
-			for _, path := range m.editVideoPaths {
-				if err := db.UpdateVideoField(path, "poster_path", posterPath); err != nil {
-					log.Printf("Failed to update poster path for video %s: %v", path, err)
-				}
+				log.Printf("Failed to update video %s field %s: %v", path, field, err)
 			}
 		}
 	}

@@ -121,8 +121,15 @@ func newVideoEditModal(filename string, labels []string, fieldKinds []videoEditF
 		posterCols:      12,
 		posterRows:      8,
 	}
-	if len(initialValues) > 12 {
-		m.posterPath = initialValues[12]
+	// InitialValues indexing (from videoEditInitialValues):
+	// ... 11:EpisodeOverview, 12:PosterPath (URL), 13:LocalPosterPath
+	if len(initialValues) > 13 && initialValues[13] != "" {
+		m.posterPath = initialValues[13] // Prefer local path for display
+	} else if len(initialValues) > 12 && initialValues[12] != "" {
+		// If no local path but it looks like a local path (starts with /), use it
+		if strings.HasPrefix(initialValues[12], "/") {
+			m.posterPath = initialValues[12]
+		}
 	}
 	return m
 }
@@ -172,28 +179,30 @@ func (m *videoEditModal) CachedKitty() string {
 func (m *videoEditModal) Width() int                { return m.width }
 
 func (m *videoEditModal) HeaderHeight() int {
-	dialogW := m.width - 4
-	if dialogW < 40 {
-		dialogW = 40
+	modalW := m.width
+	if modalW > 80 {
+		modalW = 80
 	}
-	if dialogW > 80 {
-		dialogW = 80
+	if modalW < 40 {
+		modalW = 40
 	}
+	contentW := modalW - 4
+
 	h := 1 // "Edit Video"
 	if m.filename != "" {
 		name := m.filename
-		maxLen := dialogW - 4
-		if maxLen < 20 {
-			maxLen = 20
-		}
+		maxLen := contentW
 		h += (len(name) + maxLen - 1) / maxLen
 	}
-	h += 1 // Spacer
+	h += 1 // Spacer line
 	return h
 }
 
 func (m *videoEditModal) Update(msg tea.Msg) (*videoEditModal, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		// Force redraw on any key press to "snap" image back if terminal scrolled
+		m.ClearDisplayed()
+
 		k := strings.ToLower(keyMsg.String())
 		// Global keys for this modal
 		switch k {
@@ -209,23 +218,28 @@ func (m *videoEditModal) Update(msg tea.Msg) (*videoEditModal, tea.Cmd) {
 		case "tab", "down":
 			m.nextField()
 			return m, nil
-		case "up": // up/down only for fields, shift+tab also for backward
+		case "up":
 			m.prevField()
 			return m, nil
 		case "shift+tab":
 			m.prevField()
 			return m, nil
 		case "pgup":
-			m.viewport.ScrollUp(m.height - 4)
+			m.viewport.ScrollUp(m.viewport.Height())
 			return m, nil
 		case "pgdown":
-			m.viewport.ScrollDown(m.height - 4)
+			m.viewport.ScrollDown(m.viewport.Height())
 			return m, nil
 		}
 	}
 
 	// Update focused field if it didn't match global keys
 	if m.focusIndex < len(m.fields) {
+		// Skip hidden fields for input
+		if m.focusIndex >= 12 {
+			m.focusIndex = 0
+		}
+
 		f := &m.fields[m.focusIndex]
 		switch f.Kind {
 		case videoFieldInput:
@@ -260,7 +274,13 @@ func (m *videoEditModal) Update(msg tea.Msg) (*videoEditModal, tea.Cmd) {
 
 func (m *videoEditModal) scrollToFocused() {
 	y := 0
-	for i := 0; i < m.focusIndex; i++ {
+	// Only count visible fields up to index 11
+	limit := m.focusIndex
+	if limit > 11 {
+		limit = 11
+	}
+
+	for i := 0; i < limit; i++ {
 		// Label (1) + Input/Select (Height) + Margin (1)
 		y += 1 + m.fields[i].Height + 1
 	}
@@ -285,7 +305,8 @@ func (m *videoEditModal) nextField() {
 		m.fields[m.focusIndex].TextArea.Blur()
 	}
 	m.focusIndex++
-	if m.focusIndex >= len(m.fields) {
+	// Only cycle through fields 0-11 (hide poster URL/path fields)
+	if m.focusIndex >= 12 {
 		m.focusIndex = 0
 	}
 	if m.fields[m.focusIndex].Kind == videoFieldInput {
@@ -304,7 +325,7 @@ func (m *videoEditModal) prevField() {
 	}
 	m.focusIndex--
 	if m.focusIndex < 0 {
-		m.focusIndex = len(m.fields) - 1
+		m.focusIndex = 11 // Jump to last visible field
 	}
 	if m.fields[m.focusIndex].Kind == videoFieldInput {
 		m.fields[m.focusIndex].Input.Focus()
@@ -317,30 +338,20 @@ func (m *videoEditModal) prevField() {
 func (m *videoEditModal) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	m.viewport.SetWidth(w - 6)
-	// Viewport height will be set in View() based on other elements
 }
 
-func (m *videoEditModal) renderPosterBlock() string {
-	dialogW := m.width - 4
-	if dialogW < 40 {
-		dialogW = 40
-	}
-	if dialogW > 80 {
-		dialogW = 80
-	}
-
+func (m *videoEditModal) renderPosterBlock(contentW int) string {
 	var sb strings.Builder
 	centerLine := m.posterRows / 2
 	for i := 0; i < m.posterRows; i++ {
-		line := strings.Repeat(" ", dialogW)
+		line := strings.Repeat(" ", contentW)
 		if m.posterPath == "" && i == centerLine {
 			noPoster := "[No Poster]"
-			pad := (dialogW - lipgloss.Width(noPoster)) / 2
+			pad := (contentW - lipgloss.Width(noPoster)) / 2
 			if pad < 0 {
 				pad = 0
 			}
-			line = strings.Repeat(" ", pad) + noPoster + strings.Repeat(" ", dialogW-pad-lipgloss.Width(noPoster))
+			line = strings.Repeat(" ", pad) + noPoster + strings.Repeat(" ", contentW-pad-lipgloss.Width(noPoster))
 		}
 		sb.WriteString(line)
 		if i < m.posterRows-1 {
@@ -351,24 +362,23 @@ func (m *videoEditModal) renderPosterBlock() string {
 }
 
 func (m *videoEditModal) View() string {
-	dialogW := m.width - 4
-	if dialogW < 40 {
-		dialogW = 40
+	modalW := m.width
+	if modalW > 80 {
+		modalW = 80
 	}
-	if dialogW > 80 {
-		dialogW = 80
+	if modalW < 40 {
+		modalW = 40
 	}
-	
+	modalH := m.height
+	contentW := modalW - 4
+
 	headerH := m.HeaderHeight()
 
 	var headerLines []string
 	headerLines = append(headerLines, lipgloss.NewStyle().Bold(true).Render("Edit Video"))
 	if m.filename != "" {
 		name := m.filename
-		maxLen := dialogW - 4
-		if maxLen < 20 {
-			maxLen = 20
-		}
+		maxLen := contentW
 		// Wrap name if too long
 		for len(name) > 0 {
 			chunk := name
@@ -384,29 +394,22 @@ func (m *videoEditModal) View() string {
 	headerLines = append(headerLines, "")
 	headerView := strings.Join(headerLines, "\n")
 
-	var footerLines []string
 	tmdbBtn := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Ctrl+s: TMDB Search")
 	footerKeys := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Tab/↓: Next  Shift+Tab/↑: Prev  Enter: Save  Esc: Cancel")
-	footerLines = append(footerLines, "")
-	footerLines = append(footerLines, tmdbBtn+"  "+footerKeys)
-	footerView := strings.Join(footerLines, "\n")
+	footerView := tmdbBtn + "  " + footerKeys
+	footerH := 1
 
-	footerH := lipgloss.Height(footerView)
-
-	fieldsW := dialogW - 4
-	if fieldsW < 20 {
-		fieldsW = 20
-	}
-
-	// Calculate viewport height: Total height - borders(2) - padding(0) - header - poster - footer - spacers(2)
-	vpH := m.height - 2 - headerH - m.posterRows - footerH - 2
-	if vpH < 5 {
-		vpH = 5
+	// Calculate viewport height: Total height - borders(2) - header - poster - footer
+	vpH := modalH - 2 - headerH - m.posterRows - footerH
+	if vpH < 2 {
+		vpH = 2
 	}
 	m.viewport.SetHeight(vpH)
+	m.viewport.SetWidth(contentW)
 
 	var fieldLines []string
-	for i, f := range m.fields {
+	for i := 0; i < 12; i++ { // Only render first 12 fields
+		f := &m.fields[i]
 		isFocused := i == m.focusIndex
 		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 		if isFocused {
@@ -416,10 +419,10 @@ func (m *videoEditModal) View() string {
 
 		switch f.Kind {
 		case videoFieldInput:
-			f.Input.SetWidth(fieldsW - 2)
+			f.Input.SetWidth(contentW)
 			fieldLines = append(fieldLines, f.Input.View())
 		case videoFieldTextArea:
-			f.TextArea.SetWidth(fieldsW - 2)
+			f.TextArea.SetWidth(contentW)
 			f.TextArea.SetHeight(f.Height)
 			fieldLines = append(fieldLines, f.TextArea.View())
 		case videoFieldSelect:
@@ -438,7 +441,7 @@ func (m *videoEditModal) View() string {
 
 	m.viewport.SetContent(strings.Join(fieldLines, "\n"))
 
-	posterBlock := m.renderPosterBlock()
+	posterBlock := m.renderPosterBlock(contentW)
 
 	mainView := lipgloss.JoinVertical(lipgloss.Left,
 		headerView,
@@ -448,7 +451,8 @@ func (m *videoEditModal) View() string {
 	)
 
 	return lipgloss.NewStyle().
-		Width(dialogW).
+		Width(modalW - 2).
+		Height(modalH - 2).
 		Padding(0, 1).
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("62")).

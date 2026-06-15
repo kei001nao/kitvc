@@ -266,6 +266,22 @@ func (mad musicArtistDetail) SelectedAlbum() (string, bool) {
 	return "", false
 }
 
+func (mad musicArtistDetail) SelectedAlbumID() (int64, bool) {
+	row := mad.albumsTable.HighlightedRow()
+	if idx := mad.albumsTable.GetHighlightedRowIndex(); idx >= 0 && idx < len(mad.albums) {
+		return mad.albums[idx].ID, true
+	}
+	// Fallback to title based search if row data is available
+	if val, ok := row.Data[albumColTitle].(string); ok {
+		for _, a := range mad.albums {
+			if a.Title == val {
+				return a.ID, true
+			}
+		}
+	}
+	return 0, false
+}
+
 func (mad musicArtistDetail) SelectedTrack() (db.TrackData, bool) {
 	if mad.focusedUpper {
 		return db.TrackData{}, false

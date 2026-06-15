@@ -9,6 +9,7 @@ var videoEditLabels = []string{
 	"Type", "Category", "SubCategory", "Genres", "Title", "Series",
 	"Season", "Episode", "Date",
 	"Series Overview", "Synopsis", "Episode Overview",
+	"Poster URL", "Local Poster",
 }
 
 var videoEditFieldNames = []string{
@@ -48,8 +49,8 @@ var videoEditOptions = [][]string{
 	nil,               // Series Overview
 	nil,               // Synopsis
 	nil,               // Episode Overview
-	nil,               // Poster Path
-	nil,               // Local Poster Path
+	nil,               // Poster URL
+	nil,               // Local Poster
 }
 
 func videoEditInitialValues(v db.VideoData) []string {
@@ -81,10 +82,17 @@ func videoBatchEditInitialValues(videos []db.VideoData) []string {
 
 	for i := range videoEditLabels {
 		common := true
-		val := first[i]
+		val := ""
+		if i < len(first) {
+			val = first[i]
+		}
 		for j := 1; j < len(videos); j++ {
 			current := videoEditInitialValues(videos[j])
-			if current[i] != val {
+			curVal := ""
+			if i < len(current) {
+				curVal = current[i]
+			}
+			if curVal != val {
 				common = false
 				break
 			}
