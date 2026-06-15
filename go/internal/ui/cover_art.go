@@ -19,6 +19,7 @@ func (c *coverArt) load(path string, cols, maxRows int) bool {
 	if c.path == path && c.cols == cols && c.cached {
 		return false
 	}
+	changed := (c.path != path) || (c.cols != cols)
 	c.path = path
 	c.cols = cols
 	c.rows = 0
@@ -26,7 +27,7 @@ func (c *coverArt) load(path string, cols, maxRows int) bool {
 	c.cached = false
 
 	if path == "" || cols <= 0 || maxRows <= 0 {
-		return false
+		return changed
 	}
 
 	f, err := os.Open(path)

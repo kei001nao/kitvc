@@ -2070,10 +2070,23 @@ func (m *model) refreshCurrentVideoView() {
 	}
 }
 
+func (m *model) coverClearCmd() tea.Cmd {
+	return func() tea.Msg {
+		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+		if err != nil {
+			return nil
+		}
+		defer f.Close()
+		f.WriteString("\x1b_Ga=d,i=1\x1b\\")
+		f.Sync()
+		return nil
+	}
+}
+
 func (m *model) coverDisplayCmd() tea.Cmd {
 	path := m.sidebar.CoverPath()
 	if path == "" || !m.sidebar.HasCover() {
-		return nil
+		return m.coverClearCmd()
 	}
 	cols := m.sidebar.CoverCols()
 	rows := m.sidebar.CoverRows()
@@ -2103,6 +2116,7 @@ func (m *model) coverDisplayCmd() tea.Cmd {
 
 		// Hide cursor, move to position, draw, then hide cursor again to be sure.
 		f.WriteString("\x1b[?25l") 
+		f.WriteString("\x1b_Ga=d,i=1\x1b\\") // Clear old ID=1 image before drawing new one
 		fmt.Fprintf(f, "\x1b[%d;1H", m.sidebar.CoverRow()+1)
 		f.WriteString(kittyOut)
 		f.WriteString("\x1b[?25l")
