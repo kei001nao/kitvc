@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -345,6 +346,33 @@ func ClearVideoLastPos(path string) error {
 		WHERE path = ?
 	`, path)
 	return err
+}
+
+func GetVideoPosterPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	var localPosterPath, posterPath string
+	err := db.QueryRow(`
+		SELECT COALESCE(local_poster_path, ''), COALESCE(poster_path, '')
+		FROM video_files WHERE path = ?
+	`, path).Scan(&localPosterPath, &posterPath)
+	if err != nil {
+		return ""
+	}
+	if localPosterPath != "" {
+		if _, err := os.Stat(localPosterPath); err == nil {
+			return localPosterPath
+		}
+	}
+	if posterPath != "" {
+		if strings.HasPrefix(posterPath, "/") {
+			if _, err := os.Stat(posterPath); err == nil {
+				return posterPath
+			}
+		}
+	}
+	return ""
 }
 
 var videoAllowedFields = map[string]bool{

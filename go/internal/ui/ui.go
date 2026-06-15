@@ -1280,9 +1280,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
+			oldIdx := m.videoList.table.GetHighlightedRowIndex()
 			var cmd tea.Cmd
 			m.videoList, cmd = m.videoList.Update(msg)
 			cmds = append(cmds, cmd)
+			newIdx := m.videoList.table.GetHighlightedRowIndex()
+			if oldIdx != newIdx && newIdx >= 0 && newIdx < len(m.videoList.videos) {
+				cmds = append(cmds, m.updateCoverForVideo(m.videoList.videos[newIdx].Path))
+			}
 		}
 	}
 
@@ -1303,6 +1308,15 @@ func (m *model) syncFocus() {
 
 func (m *model) updateCoverForAlbumID(albumID int64) tea.Cmd {
 	coverPath := library.GetCachedCoverPath(albumID)
+	return m.updateCoverForPath(coverPath)
+}
+
+func (m *model) updateCoverForVideo(videoPath string) tea.Cmd {
+	posterPath := db.GetVideoPosterPath(videoPath)
+	return m.updateCoverForPath(posterPath)
+}
+
+func (m *model) updateCoverForPath(path string) tea.Cmd {
 	cols := m.getSidebarWidth() - 2
 	if cols < 10 {
 		cols = 10
@@ -1311,7 +1325,7 @@ func (m *model) updateCoverForAlbumID(albumID int64) tea.Cmd {
 	if maxRows < 6 {
 		maxRows = 6
 	}
-	if m.sidebar.SetCoverPath(coverPath, cols, maxRows) {
+	if m.sidebar.SetCoverPath(path, cols, maxRows) {
 		return m.coverDisplayCmd()
 	}
 	return nil
@@ -1336,19 +1350,7 @@ func (m *model) updateCoverForNode(n *node) tea.Cmd {
 			}
 		}
 	}
-
-	cols := m.getSidebarWidth() - 2
-	if cols < 10 {
-		cols = 10
-	}
-	maxRows := (m.height - 5) - 5
-	if maxRows < 6 {
-		maxRows = 6
-	}
-	if m.sidebar.SetCoverPath(coverPath, cols, maxRows) {
-		return m.coverDisplayCmd()
-	}
-	return nil
+	return m.updateCoverForPath(coverPath)
 }
 
 func (m *model) setCoverFromPlaying() tea.Cmd {
@@ -1371,18 +1373,7 @@ func (m *model) setCoverFromPlaying() tea.Cmd {
 	if coverPath == "" {
 		return nil
 	}
-	cols := m.getSidebarWidth() - 2
-	if cols < 10 {
-		cols = 10
-	}
-	maxRows := (m.height - 5) - 5
-	if maxRows < 6 {
-		maxRows = 6
-	}
-	if m.sidebar.SetCoverPath(coverPath, cols, maxRows) {
-		return m.coverDisplayCmd()
-	}
-	return nil
+	return m.updateCoverForPath(coverPath)
 }
 
 func (m *model) handleSidebarChange(n *node) tea.Cmd {
