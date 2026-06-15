@@ -41,6 +41,7 @@ type videoFetchModal struct {
 
 	width  int
 	height int
+	tableH int
 
 	loading  bool
 	errorMsg string
@@ -54,6 +55,12 @@ type videoFetchModal struct {
 	lastEpisodeIdx   int
 	overlayStartLine int
 	overlayStartCol  int
+
+	lastDisplayedPath string
+	lastDisplayedRow  int
+	lastDisplayedCol  int
+	displayed         bool
+	cachedKitty      string
 
 	SelectedID      int
 	SelectedIsTV    bool
@@ -639,6 +646,30 @@ func (m *videoFetchModal) OverlayStartLine() int     { return m.overlayStartLine
 func (m *videoFetchModal) OverlayStartCol() int      { return m.overlayStartCol }
 func (m *videoFetchModal) SetOverlayPos(sl, sc int)  { m.overlayStartLine = sl; m.overlayStartCol = sc }
 
+func (m *videoFetchModal) NeedsDisplay(path string, row, col int) bool {
+	if path == "" {
+		return false
+	}
+	return !m.displayed || path != m.lastDisplayedPath || row != m.lastDisplayedRow || col != m.lastDisplayedCol
+}
+
+func (m *videoFetchModal) SetDisplayed(path string, row, col int) {
+	m.lastDisplayedPath = path
+	m.lastDisplayedRow = row
+	m.lastDisplayedCol = col
+	m.displayed = true
+}
+
+func (m *videoFetchModal) ClearDisplayed() {
+	m.displayed = false
+	m.lastDisplayedPath = ""
+	m.cachedKitty = ""
+}
+
+func (m *videoFetchModal) CachedKitty() string {
+	return m.cachedKitty
+}
+
 func (m *videoFetchModal) HeaderHeight() int {
 	h := 1 // "TMDB Search"
 	h += 1 // Spacer
@@ -695,18 +726,6 @@ func (m *videoFetchModal) View() string {
 	}
 	footerView := footer.String()
 
-	headerH := m.HeaderHeight()
-	footerH := lipgloss.Height(footerView)
-	
-	// Available height for tables
-	tableH := m.height - 2 - headerH - footerH - 1
-	if tableH < 5 {
-		tableH = 5
-	}
-	m.seriesTable = m.seriesTable.WithTargetHeight(tableH).WithMinimumHeight(tableH)
-	m.seasonTable = m.seasonTable.WithTargetHeight(tableH).WithMinimumHeight(tableH)
-	m.episodeTable = m.episodeTable.WithTargetHeight(tableH).WithMinimumHeight(tableH)
-
 	// Wrap tables in focused styles
 	baseStyle := lipgloss.NewStyle().
 		Padding(0, 1).
@@ -762,6 +781,16 @@ func (m *videoFetchModal) SetSize(w, h int) {
 	m.height = h
 
 	leftStyle := lipgloss.NewStyle().Align(lipgloss.Left)
+
+	headerH := m.HeaderHeight()
+	footerH := 2 // footer is 1 line + newline
+	m.tableH = h - 2 - headerH - footerH - 1
+	if m.tableH < 5 {
+		m.tableH = 5
+	}
+	m.seriesTable = m.seriesTable.WithTargetHeight(m.tableH).WithMinimumHeight(m.tableH)
+	m.seasonTable = m.seasonTable.WithTargetHeight(m.tableH).WithMinimumHeight(m.tableH)
+	m.episodeTable = m.episodeTable.WithTargetHeight(m.tableH).WithMinimumHeight(m.tableH)
 
 	// Poster size (chafa renders at posterCols x posterRows character cells)
 	m.posterCols = 22

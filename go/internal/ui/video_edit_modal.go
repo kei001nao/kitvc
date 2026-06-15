@@ -29,6 +29,12 @@ type videoEditModal struct {
 	posterRows       int
 	overlayStartLine int
 	overlayStartCol  int
+
+	lastDisplayedPath string
+	lastDisplayedRow  int
+	lastDisplayedCol  int
+	displayed         bool
+	cachedKitty       string
 }
 
 type videoEditFieldKind int
@@ -138,6 +144,31 @@ func (m *videoEditModal) PosterRows() int           { return m.posterRows }
 func (m *videoEditModal) SetOverlayPos(sl, sc int)  { m.overlayStartLine = sl; m.overlayStartCol = sc }
 func (m *videoEditModal) OverlayStartLine() int     { return m.overlayStartLine }
 func (m *videoEditModal) OverlayStartCol() int      { return m.overlayStartCol }
+
+func (m *videoEditModal) NeedsDisplay(path string, row, col int) bool {
+	if path == "" {
+		return false
+	}
+	return !m.displayed || path != m.lastDisplayedPath || row != m.lastDisplayedRow || col != m.lastDisplayedCol
+}
+
+func (m *videoEditModal) SetDisplayed(path string, row, col int) {
+	m.lastDisplayedPath = path
+	m.lastDisplayedRow = row
+	m.lastDisplayedCol = col
+	m.displayed = true
+}
+
+func (m *videoEditModal) ClearDisplayed() {
+	m.displayed = false
+	m.lastDisplayedPath = ""
+	m.cachedKitty = ""
+}
+
+func (m *videoEditModal) CachedKitty() string {
+	return m.cachedKitty
+}
+
 func (m *videoEditModal) Width() int                { return m.width }
 
 func (m *videoEditModal) HeaderHeight() int {
