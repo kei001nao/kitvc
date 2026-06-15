@@ -62,6 +62,10 @@ type videoFetchModal struct {
 	displayed         bool
 	cachedKitty      string
 
+	lastFetchedSeriesID  int
+	lastFetchedSeasonNum int
+	lastFetchedSeriesIDForEpisodes int
+
 	SelectedID      int
 	SelectedIsTV    bool
 	SelectedSeason  int
@@ -99,6 +103,9 @@ func newVideoFetchModal(apiKey, query string, isTV bool, initialSeason, initialE
 		lastPosterIdx:  -1,
 		lastSeasonIdx:  -1,
 		lastEpisodeIdx: -1,
+		lastFetchedSeriesID: -1,
+		lastFetchedSeasonNum: -1,
+		lastFetchedSeriesIDForEpisodes: -1,
 	}
 	
 	m.initTables()
@@ -171,61 +178,79 @@ func (m *videoFetchModal) Update(msg tea.Msg) (*videoFetchModal, tea.Cmd) {
 			return m, nil
 		case "tab":
 			m.nextFocus()
-			var posterCmd tea.Cmd
 			switch m.focus {
+			case focusSeries:
+				cmds = append(cmds, m.onSeriesSelected())
 			case focusSeason:
-				posterCmd = m.onSeasonSelected()
+				cmds = append(cmds, m.onSeasonSelected())
+				if m.mediaType == "TV Show" {
+					cmds = append(cmds, m.fetchSeasons())
+				}
 			case focusEpisode:
-				posterCmd = m.onEpisodeSelected()
+				cmds = append(cmds, m.onEpisodeSelected())
+				cmds = append(cmds, m.fetchEpisodes())
 			}
-			return m, posterCmd
 		case "shift+tab":
 			m.prevFocus()
-			var posterCmd tea.Cmd
 			switch m.focus {
+			case focusSeries:
+				cmds = append(cmds, m.onSeriesSelected())
 			case focusSeason:
-				posterCmd = m.onSeasonSelected()
+				cmds = append(cmds, m.onSeasonSelected())
+				if m.mediaType == "TV Show" {
+					cmds = append(cmds, m.fetchSeasons())
+				}
 			case focusEpisode:
-				posterCmd = m.onEpisodeSelected()
+				cmds = append(cmds, m.onEpisodeSelected())
+				cmds = append(cmds, m.fetchEpisodes())
 			}
-			return m, posterCmd
 		case "enter", "ctrl+j":
-			return m.handleEnter()
-		}
-
-		// Handle focus-specific keys
-		switch m.focus {
-		case focusQuery:
 			var cmd tea.Cmd
-			m.queryInput, cmd = m.queryInput.Update(msg)
+			m, cmd = m.handleEnter()
 			cmds = append(cmds, cmd)
-		case focusType:
-			switch msg.String() {
-			case "left", "h":
-				m.cycleType(-1)
-			case "right", "l":
-				m.cycleType(1)
-			}
-		case focusSeries:
-			var cmd tea.Cmd
-			m.seriesTable, cmd = m.seriesTable.Update(msg)
-			cmds = append(cmds, cmd)
-			if posterCmd := m.onSeriesSelected(); posterCmd != nil {
-				cmds = append(cmds, posterCmd)
-			}
-		case focusSeason:
-			var cmd tea.Cmd
-			m.seasonTable, cmd = m.seasonTable.Update(msg)
-			cmds = append(cmds, cmd)
-			if posterCmd := m.onSeasonSelected(); posterCmd != nil {
-				cmds = append(cmds, posterCmd)
-			}
-		case focusEpisode:
-			var cmd tea.Cmd
-			m.episodeTable, cmd = m.episodeTable.Update(msg)
-			cmds = append(cmds, cmd)
-			if posterCmd := m.onEpisodeSelected(); posterCmd != nil {
-				cmds = append(cmds, posterCmd)
+		default:
+			// Handle focus-specific keys
+			switch m.focus {
+			case focusQuery:
+				var cmd tea.Cmd
+				m.queryInput, cmd = m.queryInput.Update(msg)
+				cmds = append(cmds, cmd)
+			case focusType:
+				switch msg.String() {
+				case "left", "h":
+					m.cycleType(-1)
+				case "right", "l":
+					m.cycleType(1)
+				}
+			case focusSeries:
+				var cmd tea.Cmd
+				m.seriesTable, cmd = m.seriesTable.Update(msg)
+				cmds = append(cmds, cmd)
+				if posterCmd := m.onSeriesSelected(); posterCmd != nil {
+					cmds = append(cmds, posterCmd)
+				}
+				if m.mediaType == "TV Show" {
+					if syncCmd := m.fetchSeasons(); syncCmd != nil {
+						cmds = append(cmds, syncCmd)
+					}
+				}
+			case focusSeason:
+				var cmd tea.Cmd
+				m.seasonTable, cmd = m.seasonTable.Update(msg)
+				cmds = append(cmds, cmd)
+				if posterCmd := m.onSeasonSelected(); posterCmd != nil {
+					cmds = append(cmds, posterCmd)
+				}
+				if syncCmd := m.fetchEpisodes(); syncCmd != nil {
+					cmds = append(cmds, syncCmd)
+				}
+			case focusEpisode:
+				var cmd tea.Cmd
+				m.episodeTable, cmd = m.episodeTable.Update(msg)
+				cmds = append(cmds, cmd)
+				if posterCmd := m.onEpisodeSelected(); posterCmd != nil {
+					cmds = append(cmds, posterCmd)
+				}
 			}
 		}
 
@@ -234,16 +259,20 @@ func (m *videoFetchModal) Update(msg tea.Msg) (*videoFetchModal, tea.Cmd) {
 		m.seriesItems = msg.items
 		m.populateSeriesTable()
 		m.lastPosterIdx = -1
-		cmds = append(cmds, m.downloadPosterForIndex(0))
-		return m, tea.Batch(cmds...)
+		m.lastFetchedSeriesID = -1 // Reset sync state
+		cmds = append(cmds, m.onSeriesSelected())
+		if m.mediaType == "TV Show" {
+			cmds = append(cmds, m.fetchSeasons())
+		}
 
 	case seasonsResultMsg:
 		m.loading = false
 		m.seasonItems = msg.seasons
 		m.populateSeasonTable()
 		m.lastSeasonIdx = -1
+		m.lastFetchedSeasonNum = -1 // Reset sync state
 		cmds = append(cmds, m.onSeasonSelected())
-		return m, tea.Batch(cmds...)
+		cmds = append(cmds, m.fetchEpisodes())
 
 	case episodesResultMsg:
 		m.loading = false
@@ -251,16 +280,17 @@ func (m *videoFetchModal) Update(msg tea.Msg) (*videoFetchModal, tea.Cmd) {
 		m.populateEpisodeTable()
 		m.lastEpisodeIdx = -1
 		cmds = append(cmds, m.onEpisodeSelected())
-		return m, tea.Batch(cmds...)
 
 	case posterDLResultMsg:
 		m.posterPath = msg.path
-		return m, tea.Batch(cmds...)
 
 	case errorMsg:
 		m.loading = false
 		m.errorMsg = string(msg)
-		return m, tea.Batch(cmds...)
+	}
+
+	if m.focus != focusQuery {
+		cmds = append(cmds, hideCursorCmd())
 	}
 
 	return m, tea.Batch(cmds...)
@@ -341,6 +371,7 @@ func (m *videoFetchModal) handleEnter() (*videoFetchModal, tea.Cmd) {
 		query := m.queryInput.Value()
 		isTV := m.mediaType == "TV Show"
 		
+		m.blurAll()
 		m.focus = focusSeries
 		m.focusAll()
 
@@ -390,8 +421,12 @@ func (m *videoFetchModal) fetchSeasons() tea.Cmd {
 	if idx < 0 || idx >= len(m.seriesItems) {
 		return nil
 	}
-	m.loading = true
 	id := m.seriesItems[idx].ID
+	if id == m.lastFetchedSeriesID {
+		return nil
+	}
+	m.lastFetchedSeriesID = id
+	m.loading = true
 	return func() tea.Msg {
 		details, err := m.client.FetchTVDetails(id)
 		if err != nil {
@@ -407,9 +442,14 @@ func (m *videoFetchModal) fetchEpisodes() tea.Cmd {
 	if sIdx < 0 || sIdx >= len(m.seriesItems) || seIdx < 0 || seIdx >= len(m.seasonItems) {
 		return nil
 	}
-	m.loading = true
 	seriesID := m.seriesItems[sIdx].ID
 	seasonNum := m.seasonItems[seIdx].SeasonNumber
+	if seriesID == m.lastFetchedSeriesIDForEpisodes && seasonNum == m.lastFetchedSeasonNum {
+		return nil
+	}
+	m.lastFetchedSeriesIDForEpisodes = seriesID
+	m.lastFetchedSeasonNum = seasonNum
+	m.loading = true
 	return func() tea.Msg {
 		details, err := m.client.FetchTVSeason(seriesID, seasonNum)
 		if err != nil {
@@ -617,6 +657,11 @@ func (m *videoFetchModal) fetchPosterCmd(item tmdb.SearchItem) tea.Cmd {
 
 func (m *videoFetchModal) renderPosterBlock() string {
 	var sb strings.Builder
+	// 2 line spacer to align with tables and lower the image further
+	// Total shift: 1 (JoinVertical) + 2 (here) = 3 lines
+	sb.WriteString(strings.Repeat(" ", m.posterCols) + "\n")
+	sb.WriteString(strings.Repeat(" ", m.posterCols) + "\n")
+
 	centerLine := m.posterRows / 2
 	for i := 0; i < m.posterRows; i++ {
 		if m.posterPath == "" && i == centerLine {
@@ -670,6 +715,10 @@ func (m *videoFetchModal) CachedKitty() string {
 	return m.cachedKitty
 }
 
+func (m *videoFetchModal) IsQueryFocused() bool {
+	return m.focus == focusQuery
+}
+
 func (m *videoFetchModal) HeaderHeight() int {
 	h := 1 // "TMDB Search"
 	h += 1 // Spacer
@@ -677,12 +726,11 @@ func (m *videoFetchModal) HeaderHeight() int {
 	h += 1 // Input view
 	h += 1 // Spacer
 	h += 1 // "Media Type:" line
-	h += 1 // Spacer
 	return h
 }
 
 func (m *videoFetchModal) PosterRow() int {
-	return m.HeaderHeight()
+	return m.HeaderHeight() + 3 // +1 for JoinVertical spacer, +2 for renderPosterBlock spacers
 }
 
 func (m *videoFetchModal) View() string {
@@ -712,17 +760,16 @@ func (m *videoFetchModal) View() string {
 			header.WriteString(" " + opt + "   ")
 		}
 	}
-	header.WriteString("\n\n")
 	headerView := header.String()
 
 	var footer strings.Builder
 	// Footer
 	if m.loading {
-		footer.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("Loading...") + "\n")
+		footer.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("Loading..."))
 	} else if m.errorMsg != "" {
-		footer.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("Error: "+m.errorMsg) + "\n")
+		footer.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("Error: "+m.errorMsg))
 	} else {
-		footer.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Tab: Focus  Enter: Search/Select  Esc: Cancel") + "\n")
+		footer.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Tab: Focus  Enter: Search/Select  Esc: Cancel"))
 	}
 	footerView := footer.String()
 
@@ -764,12 +811,15 @@ func (m *videoFetchModal) View() string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		headerView,
+		"", // Spacer
 		body,
+		"", // Spacer
 		footerView,
 	)
 
 	return lipgloss.NewStyle().
 		Width(m.width - 4).
+		Height(m.height - 2).
 		Padding(0, 1).
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("62")).
@@ -783,8 +833,12 @@ func (m *videoFetchModal) SetSize(w, h int) {
 	leftStyle := lipgloss.NewStyle().Align(lipgloss.Left)
 
 	headerH := m.HeaderHeight()
-	footerH := 2 // footer is 1 line + newline
-	m.tableH = h - 2 - headerH - footerH - 1
+	footerH := 1
+	// Total lines = headerH + 1 (spacer) + bodyH + 1 (spacer) + footerH
+	// We want Total lines = h - 2
+	// bodyH = (h - 2) - headerH - 1 - 1 - footerH = h - 5 - headerH - footerH
+	// tableH + 2 = bodyH => tableH = h - 7 - headerH - footerH
+	m.tableH = h - 7 - headerH - footerH
 	if m.tableH < 5 {
 		m.tableH = 5
 	}
@@ -798,8 +852,8 @@ func (m *videoFetchModal) SetSize(w, h int) {
 	if m.posterRows < 8 {
 		m.posterRows = 8
 	}
-	if m.posterRows > h-12 {
-		m.posterRows = h - 12
+	if m.posterRows > m.tableH+2-3 { // -3 for the top margins we add in renderPosterBlock
+		m.posterRows = m.tableH + 2 - 3
 	}
 	posterW := m.posterCols + 2
 

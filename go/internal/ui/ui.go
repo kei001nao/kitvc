@@ -2130,6 +2130,7 @@ func (m *model) syncPosterCmd() tea.Cmd {
 		f.WriteString("\x1b_Ga=d,i=3\x1b\\")
 		f.WriteString(kitty)
 		f.WriteString("\x1b[u")
+		f.WriteString("\x1b[?25l") // Hide cursor again after restore
 		
 		f.Sync()
 		log.Printf("[DEBUGLOG] syncPosterCmd: finished writing")
@@ -2158,6 +2159,7 @@ func (m *model) syncVideoEditPosterCmd() tea.Cmd {
 		f.WriteString("\x1b_Ga=d,i=2\x1b\\")
 		f.WriteString(kitty)
 		f.WriteString("\x1b[u")
+		f.WriteString("\x1b[?25l") // Hide cursor again after restore
 		
 		f.Sync()
 		log.Printf("[DEBUGLOG] syncVideoEditPosterCmd: finished writing")
@@ -2173,8 +2175,8 @@ func (m *model) posterPos() (row, col, w, h int) {
 	sc := m.videoFetch.OverlayStartCol()
 	// sl is the starting line of the modal border (row 0 of the modal)
 	// Modal content starts at row 1 (inside the top border)
-	// Header height tells us where the poster block starts relative to content top
-	row = sl + 1 + m.videoFetch.HeaderHeight()
+	// PosterRow() tells us where the poster block starts relative to content top
+	row = sl + 1 + m.videoFetch.PosterRow()
 	col = sc + 2 // left border(1) + left pad(1)
 	w = m.videoFetch.PosterCols()
 	h = m.videoFetch.PosterRows()
@@ -2192,9 +2194,12 @@ func (m *model) posterClearCmd() tea.Cmd {
 			return nil
 		}
 		defer f.Close()
-		// Move cursor to poster top-left and delete ONLY image with ID 3
+		// Save cursor, move to poster top-left, delete image with ID 3, restore cursor, hide cursor
+		f.WriteString("\x1b[?25l")
+		f.WriteString("\x1b[s")
 		fmt.Fprintf(f, "\x1b[%d;%dH", row+1, col+1)
 		f.WriteString("\x1b_Ga=d,i=3\x1b\\")
+		f.WriteString("\x1b[u")
 		f.WriteString("\x1b[?25l")
 		f.Sync()
 		return nil
@@ -2513,10 +2518,37 @@ func (m model) View() tea.View {
 		mainView = strings.Join(bgLines, "\n")
 	}
 
+	if !m.isAnyInputFocused() {
+		mainView += "\x1b[?25l"
+	}
+
 	v := tea.NewView(mainView)
-	v.Cursor = nil
+	if !m.isAnyInputFocused() {
+		v.Cursor = nil
+	}
 	v.AltScreen = true
 	return v
+}
+
+func (m model) isAnyInputFocused() bool {
+	if m.videoFetch != nil && m.videoFetch.IsQueryFocused() {
+		return true
+	}
+	if m.videoEdit != nil {
+		// videoEditModal always has a focused field unless it's a select?
+		// But usually we want the cursor for textarea too.
+		return true
+	}
+	if m.modal != nil && (m.modal.kind == modalTextInput || m.modal.kind == modalForm) {
+		return true
+	}
+	if m.filterEdit != nil && m.filterEdit.focusedSection == 0 { // Filter name
+		return true
+	}
+	if m.filterCondEdit != nil && m.filterCondEdit.focusedSection == 2 { // Value input
+		return true
+	}
+	return false
 }
 
 func (m model) renderHeader() string {
