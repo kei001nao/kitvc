@@ -250,8 +250,8 @@ func (tl *trackList) ClearMarks() {
 
 func (tl *trackList) MarkedPaths() []string {
 	var paths []string
-	for i, marked := range tl.marked {
-		if marked && i >= 0 && i < len(tl.tracks) {
+	for i := range tl.tracks {
+		if tl.marked[i] {
 			paths = append(paths, tl.tracks[i].Path)
 		}
 	}

@@ -324,8 +324,8 @@ func (mad *musicArtistDetail) UpdatePlaybackStatus(currentPath string, isPaused 
 
 func (mad *musicArtistDetail) MarkedTracks() []string {
 	var paths []string
-	for i, marked := range mad.marked {
-		if marked && i >= 0 && i < len(mad.tracks) {
+	for i := range mad.tracks {
+		if mad.marked[i] {
 			paths = append(paths, mad.tracks[i].Path)
 		}
 	}

@@ -234,8 +234,8 @@ func (vl *videoList) MarkCount() int {
 
 func (vl *videoList) MarkedVideos() []db.VideoData {
 	var videos []db.VideoData
-	for i, marked := range vl.marked {
-		if marked && i >= 0 && i < len(vl.videos) {
+	for i := range vl.videos {
+		if vl.marked[i] {
 			videos = append(videos, vl.videos[i])
 		}
 	}
@@ -244,8 +244,8 @@ func (vl *videoList) MarkedVideos() []db.VideoData {
 
 func (vl *videoList) MarkedPaths() []string {
 	var paths []string
-	for i, marked := range vl.marked {
-		if marked && i >= 0 && i < len(vl.videos) {
+	for i := range vl.videos {
+		if vl.marked[i] {
 			paths = append(paths, vl.videos[i].Path)
 		}
 	}
