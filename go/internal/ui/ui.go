@@ -1895,13 +1895,13 @@ func (m *model) applyTMDBMetadata(meta *tmdb.VideoMetadata) {
 	if meta.Season > 0 {
 		m.videoEdit.fields[6].Input.SetValue(strconv.Itoa(meta.Season))
 	} else {
-		m.videoEdit.fields[6].Input.SetValue("")
+		m.videoEdit.fields[6].Input.SetValue("0")
 	}
 
 	if meta.Episode > 0 {
 		m.videoEdit.fields[7].Input.SetValue(strconv.Itoa(meta.Episode))
 	} else {
-		m.videoEdit.fields[7].Input.SetValue("")
+		m.videoEdit.fields[7].Input.SetValue("0")
 	}
 	
 	m.videoEdit.fields[8].Input.SetValue(meta.AirDate)
@@ -1973,7 +1973,16 @@ func (m model) handleVideoEditSubmit(values []string) model {
 			break
 		}
 		val := values[i]
-		// In Go version, we allow empty strings to clear fields
+		// Skip empty strings for integer fields to preserve existing data
+		if val == "" && (field == "season" || field == "episode" || field == "year") {
+			continue
+		}
+		// Sanitize: ensure season/episode are numeric
+		if (field == "season" || field == "episode") {
+			if _, err := strconv.Atoi(val); err != nil {
+				val = "0"
+			}
+		}
 		for _, path := range m.editVideoPaths {
 			if err := db.UpdateVideoField(path, field, val); err != nil {
 				log.Printf("Failed to update video %s field %s: %v", path, field, err)

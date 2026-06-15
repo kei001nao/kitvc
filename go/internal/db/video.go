@@ -114,7 +114,7 @@ func GetVideos() ([]VideoData, error) {
 		SELECT 
 			path, filename, size, duration, year, mtime,
 			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
-			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
+			COALESCE(series, ''), COALESCE(NULLIF(season, ''), 0), COALESCE(NULLIF(episode, ''), 0), 
 			COALESCE(title, ''), COALESCE(air_date, ''),
 			COALESCE(genres, ''), COALESCE(synopsis, ''),
 			COALESCE(series_overview, ''), COALESCE(episode_overview, ''),
@@ -270,7 +270,7 @@ func GetFilteredVideos(conditionsJSON, sortJSON string) ([]VideoData, error) {
 	query := `SELECT 
 			path, filename, size, duration, year, mtime,
 			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
-			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
+			COALESCE(series, ''), COALESCE(NULLIF(season, ''), 0), COALESCE(NULLIF(episode, ''), 0), 
 			COALESCE(title, ''), COALESCE(air_date, ''),
 			COALESCE(genres, ''), COALESCE(synopsis, ''),
 			COALESCE(series_overview, ''), COALESCE(episode_overview, ''),
@@ -370,7 +370,7 @@ func GetContinueWatchingVideos() ([]VideoData, error) {
 		SELECT 
 			path, filename, size, duration, year, mtime,
 			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
-			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
+			COALESCE(series, ''), COALESCE(NULLIF(season, ''), 0), COALESCE(NULLIF(episode, ''), 0), 
 			COALESCE(title, ''), COALESCE(air_date, ''),
 			COALESCE(genres, ''), COALESCE(synopsis, ''),
 			COALESCE(series_overview, ''), COALESCE(episode_overview, ''),
@@ -407,7 +407,7 @@ func GetRecentlyAddedVideos() ([]VideoData, error) {
 		SELECT 
 			path, filename, size, duration, year, mtime,
 			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
-			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
+			COALESCE(series, ''), COALESCE(NULLIF(season, ''), 0), COALESCE(NULLIF(episode, ''), 0), 
 			COALESCE(title, ''), COALESCE(air_date, ''),
 			COALESCE(genres, ''), COALESCE(synopsis, ''),
 			COALESCE(series_overview, ''), COALESCE(episode_overview, ''),
@@ -443,7 +443,7 @@ func GetUnhealthyVideos() ([]VideoData, error) {
 		SELECT 
 			path, filename, size, duration, year, mtime,
 			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
-			COALESCE(series, ''), COALESCE(season, 0), COALESCE(episode, 0), 
+			COALESCE(series, ''), COALESCE(NULLIF(season, ''), 0), COALESCE(NULLIF(episode, ''), 0), 
 			COALESCE(title, ''), COALESCE(air_date, ''),
 			COALESCE(genres, ''), COALESCE(synopsis, ''),
 			COALESCE(series_overview, ''), COALESCE(episode_overview, ''),

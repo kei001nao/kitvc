@@ -90,8 +90,9 @@ func newVideoEditModal(filename string, labels []string, fieldKinds []videoEditF
 			}
 			ta.CharLimit = 2000
 			ta.SetHeight(f.Height)
-			ta.SetWidth(40)
 			ta.ShowLineNumbers = false
+			ta.Prompt = ""
+			ta.SetWidth(40)
 			fields[i] = f
 			fields[i].TextArea = ta
 		case videoFieldSelect:
@@ -451,8 +452,6 @@ func (m *videoEditModal) View() string {
 	)
 
 	return lipgloss.NewStyle().
-		Width(modalW - 2).
-		Height(modalH - 2).
 		Padding(0, 1).
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("62")).
