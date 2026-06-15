@@ -212,6 +212,26 @@ func (vl *videoList) ClearMarks() {
 	vl.marked = make(map[int]bool)
 }
 
+func (vl *videoList) MarkAll() {
+	if vl.MarkCount() >= len(vl.videos) && len(vl.videos) > 0 {
+		vl.ClearMarks()
+		return
+	}
+	for i := range vl.videos {
+		vl.marked[i] = true
+	}
+}
+
+func (vl *videoList) MarkCount() int {
+	count := 0
+	for _, m := range vl.marked {
+		if m {
+			count++
+		}
+	}
+	return count
+}
+
 func (vl *videoList) MarkedVideos() []db.VideoData {
 	var videos []db.VideoData
 	for i, marked := range vl.marked {

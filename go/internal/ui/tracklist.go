@@ -224,6 +224,26 @@ func (tl *trackList) UpdatePlaybackStatus(currentPath string, isPaused bool) {
 	}
 }
 
+func (tl *trackList) MarkAll() {
+	if tl.MarkCount() >= len(tl.tracks) && len(tl.tracks) > 0 {
+		tl.ClearMarks()
+		return
+	}
+	for i := range tl.tracks {
+		tl.marked[i] = true
+	}
+}
+
+func (tl *trackList) MarkCount() int {
+	count := 0
+	for _, m := range tl.marked {
+		if m {
+			count++
+		}
+	}
+	return count
+}
+
 func (tl *trackList) ClearMarks() {
 	tl.marked = make(map[int]bool)
 }

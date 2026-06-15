@@ -1113,6 +1113,47 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case "ctrl+a":
+			if !m.focusedSide {
+				if m.activeView == viewMusicLibrary || m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
+					m.trackList.MarkAll()
+					currentPath := ""
+					isPaused := false
+					if m.player != nil {
+						currentPath = m.player.GetCurrentTrackPath()
+						valPause, _ := m.player.GetProperty("pause")
+						if p, ok := valPause.(bool); ok {
+							isPaused = p
+						}
+					}
+					m.trackList.UpdatePlaybackStatus(currentPath, isPaused)
+				} else if m.activeView == viewMusicArtistDetail && !m.artistDetail.focusedUpper {
+					m.artistDetail.MarkAll()
+					currentPath := ""
+					isPaused := false
+					if m.player != nil {
+						currentPath = m.player.GetCurrentTrackPath()
+						valPause, _ := m.player.GetProperty("pause")
+						if p, ok := valPause.(bool); ok {
+							isPaused = p
+						}
+					}
+					m.artistDetail.UpdatePlaybackStatus(currentPath, isPaused)
+				} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
+					m.videoList.MarkAll()
+					currentPath := ""
+					isPaused := false
+					if m.player != nil {
+						currentPath = m.player.GetCurrentTrackPath()
+						valPause, _ := m.player.GetProperty("pause")
+						if p, ok := valPause.(bool); ok {
+							isPaused = p
+						}
+					}
+					m.videoList.UpdatePlaybackStatus(currentPath, isPaused)
+				}
+			}
+			return m, nil
 		case "m":
 			if !m.focusedSide {
 				if m.activeView == viewMusicLibrary || m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {

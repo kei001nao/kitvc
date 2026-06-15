@@ -344,3 +344,23 @@ func (mad *musicArtistDetail) HasMarks() bool {
 func (mad *musicArtistDetail) ClearMarks() {
 	mad.marked = make(map[int]bool)
 }
+
+func (mad *musicArtistDetail) MarkAll() {
+	if mad.MarkCount() >= len(mad.tracks) && len(mad.tracks) > 0 {
+		mad.ClearMarks()
+		return
+	}
+	for i := range mad.tracks {
+		mad.marked[i] = true
+	}
+}
+
+func (mad *musicArtistDetail) MarkCount() int {
+	count := 0
+	for _, m := range mad.marked {
+		if m {
+			count++
+		}
+	}
+	return count
+}
