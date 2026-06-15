@@ -2501,12 +2501,12 @@ func (m model) View() tea.View {
 	} else if m.filterCondEdit != nil {
 		m.filterCondEdit.SetSize(m.width-10, m.height-6)
 		overlay = m.filterCondEdit.View()
-	} else if m.filterEdit != nil {
-		m.filterEdit.SetSize(m.width-10, m.height-6)
-		overlay = m.filterEdit.View()
 	} else if m.sortFieldSelect != nil {
 		m.sortFieldSelect.SetSize(m.width-10, m.height-6)
 		overlay = m.sortFieldSelect.View()
+	} else if m.filterEdit != nil {
+		m.filterEdit.SetSize(m.width-10, m.height-6)
+		overlay = m.filterEdit.View()
 	} else if m.modal != nil && m.modal.Active() {
 		m.modal.SetSize(m.width-10, m.height-6)
 		overlay = m.modal.View()

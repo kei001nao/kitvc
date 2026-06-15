@@ -305,7 +305,7 @@ func (m *filterEditModal) View() string {
 	} else {
 		for i, c := range m.conditions {
 			fLabel := c.Field
-			for _, f := range musicFilterFields {
+			for _, f := range m.filterFields {
 				if f.Value == c.Field {
 					fLabel = f.Label
 					break
@@ -334,7 +334,7 @@ func (m *filterEditModal) View() string {
 	} else {
 		for i, s := range m.sortSequence {
 			fLabel := s[0]
-			for _, f := range musicFilterFields {
+			for _, f := range m.filterFields {
 				if f.Value == s[0] {
 					fLabel = f.Label
 					break
