@@ -449,10 +449,18 @@ func (s sidebar) View(focused bool) string {
 		content.WriteString(coverStr)
 	}
 
+	contentStr := content.String()
+	// Truncate to s.height lines to prevent layout expansion
+	lines := strings.Split(contentStr, "\n")
+	if len(lines) > s.height {
+		lines = lines[:s.height]
+		contentStr = strings.Join(lines, "\n")
+	}
+
 	sidebarStyle := lipgloss.NewStyle().
 		Width(s.width).
 		Height(s.height).
 		UnsetBackground()
 	
-	return sidebarStyle.Render(content.String())
+	return sidebarStyle.Render(contentStr)
 }

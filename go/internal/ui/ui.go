@@ -663,7 +663,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						_, albums, err := db.GetMusicArtistsAndAlbums()
 						if err == nil {
 							sbWidth := m.getSidebarWidth()
-							m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-8, selectedArtist, albums[selectedArtist])
+							m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-5, selectedArtist, albums[selectedArtist])
 							m.focusedSide = false
 							m.syncFocus()
 						}
@@ -1175,17 +1175,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progress.SetWidth(m.width - 20)
 
 		sbWidth := m.getSidebarWidth()
-		m.sidebar.SetSize(sbWidth, m.height-8)
+		m.sidebar.SetSize(sbWidth, m.height-5)
 
 		mainWidth := m.width - sbWidth - 2
 		if mainWidth <= 0 {
 			mainWidth = 1
 		}
 
-		m.trackList.SetSize(mainWidth-1, m.height-8)
-		m.videoList.SetSize(mainWidth-1, m.height-8)
-		m.musicArtists.SetSize(mainWidth-1, m.height-8)
-		m.artistDetail.SetSize(mainWidth-1, m.height-8)
+		m.trackList.SetSize(mainWidth-1, m.height-5)
+		m.videoList.SetSize(mainWidth-1, m.height-5)
+		m.musicArtists.SetSize(mainWidth-1, m.height-5)
+		m.artistDetail.SetSize(mainWidth-1, m.height-5)
 		if m.videoFetch != nil {
 			m.videoFetch.SetSize(m.width-10, m.height-6)
 			m.videoFetch.ClearDisplayed()
@@ -1307,7 +1307,7 @@ func (m *model) updateCoverForAlbumID(albumID int64) tea.Cmd {
 	if cols < 10 {
 		cols = 10
 	}
-	maxRows := (m.height - 8) - 5
+	maxRows := (m.height - 5) - 5
 	if maxRows < 6 {
 		maxRows = 6
 	}
@@ -1341,7 +1341,7 @@ func (m *model) updateCoverForNode(n *node) tea.Cmd {
 	if cols < 10 {
 		cols = 10
 	}
-	maxRows := (m.height - 8) - 5
+	maxRows := (m.height - 5) - 5
 	if maxRows < 6 {
 		maxRows = 6
 	}
@@ -1375,7 +1375,7 @@ func (m *model) setCoverFromPlaying() tea.Cmd {
 	if cols < 10 {
 		cols = 10
 	}
-	maxRows := (m.height - 8) - 5
+	maxRows := (m.height - 5) - 5
 	if maxRows < 6 {
 		maxRows = 6
 	}
@@ -1398,7 +1398,7 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 		artists, _, err := db.GetMusicArtistsAndAlbums()
 		if err == nil {
 			sbWidth := m.getSidebarWidth()
-			m.musicArtists = newMusicArtists(m.width-sbWidth-3, m.height-8, artists)
+			m.musicArtists = newMusicArtists(m.width-sbWidth-3, m.height-5, artists)
 		}
 	case n.id == "music_recent":
 		m.activeView = viewMusicRecent
@@ -1421,7 +1421,7 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 		_, albums, err := db.GetMusicArtistsAndAlbums()
 		if err == nil {
 			sbWidth := m.getSidebarWidth()
-			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-8, artist, albums[artist])
+			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-5, artist, albums[artist])
 		}
 	case strings.HasPrefix(n.id, "album:"):
 		artist, albumTitle := m.getCurrentFilter()
@@ -1689,7 +1689,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 			trackCursor := m.artistDetail.tracksTable.GetHighlightedRowIndex()
 			wasFocusedUpper := m.artistDetail.focusedUpper
 			wasFocused := m.focusedSide
-			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-8, m.artistDetail.artist, m.artistDetail.albums)
+			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-5, m.artistDetail.artist, m.artistDetail.albums)
 			if albumCursor >= 0 && albumCursor < len(m.artistDetail.albums) {
 				m.artistDetail.albumsTable = m.artistDetail.albumsTable.WithHighlightedRow(albumCursor)
 				m.artistDetail.loadTracksForAlbum(m.artistDetail.albums[albumCursor].Title)
@@ -2457,7 +2457,7 @@ func (m model) View() tea.View {
 
 	mainStyle := lipgloss.NewStyle().
 		Width(mainWidth).
-		Height(m.height - 8). // Adjusted for header and footer
+		Height(m.height - 5). // Adjusted for header and footer
 		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(lipgloss.Color("240"))
 
