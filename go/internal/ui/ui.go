@@ -13,6 +13,7 @@ import (
 	"kitvc/internal/config"
 	"kitvc/internal/db"
 	"kitvc/internal/library"
+	"kitvc/internal/musicbrainz"
 	"kitvc/internal/player"
 	"kitvc/internal/tmdb"
 
@@ -114,6 +115,14 @@ type model struct {
 	editVideoPaths      []string
 	videoEdit           *videoEditModal
 	videoFetch          *videoFetchModal
+	musicFetch          *musicFetchModal
+	musicFetchMarkedPaths []string
+	musicFetchMetadata    *musicbrainz.ReleaseInfo
+	musicBatchMode      bool
+	musicBatchCancelled bool
+	musicBatchPaths     []string
+	musicBatchIndex     int
+	musicBatchTotal     int
 	playingAlbumID    int64
 	currentFilterID   int64
 	currentFilterName string
@@ -250,22 +259,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err := library.ProcessAllAlbumCovers(); err != nil {
 					m.setMessage(err.Error())
 				}
+				// Cleanup empty albums after normalization
+				db.DeleteEmptyAlbums()
 			}
-			if m.activeView == viewMusicLibrary {
-				m.refreshTrackList("", "")
-			} else if m.activeView == viewMusicRecent {
-				m.refreshRecentTracks()
-			} else if m.activeView == viewMusicFilter {
-				m.refreshFilterTracks(m.currentFilterID)
-			} else if m.activeView == viewVideoLibrary {
-				m.refreshVideoList()
-			} else if m.activeView == viewVideoContinue {
-				m.refreshVideoContinue()
-			} else if m.activeView == viewVideoRecent {
-				m.refreshVideoRecent()
-			} else if m.activeView == viewVideoHealth {
-				m.refreshVideoHealth()
-			}
+			m.refreshActiveView()
 			if n := m.sidebar.SelectedNode(); n != nil {
 				if cmd := m.updateCoverForNode(n); cmd != nil {
 					return m, cmd
@@ -297,21 +294,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case scanFinishedMsg:
 		log.Printf("[DEBUGLOG] scanFinishedMsg received: count=%d", msg.count)
 		m.setMessage(fmt.Sprintf("Scan finished: %d items found", msg.count))
-		if m.activeView == viewMusicLibrary {
-			m.refreshTrackList("", "")
-		} else if m.activeView == viewMusicRecent {
-			m.refreshRecentTracks()
-		} else if m.activeView == viewMusicFilter {
-			m.refreshFilterTracks(m.currentFilterID)
-		} else if m.activeView == viewVideoLibrary {
-			m.refreshVideoList()
-		} else if m.activeView == viewVideoContinue {
-			m.refreshVideoContinue()
-		} else if m.activeView == viewVideoRecent {
-			m.refreshVideoRecent()
-		} else if m.activeView == viewVideoHealth {
-			m.refreshVideoHealth()
-		}
+		m.refreshActiveView()
 		// Update cover for current selection
 		if n := m.sidebar.SelectedNode(); n != nil {
 			if cmd := m.updateCoverForNode(n); cmd != nil {
@@ -319,6 +302,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
 	case tmdbBatchProgressMsg:
 		m.tmdbBatchIndex = msg.current
 		m.tmdbBatchTotal = msg.total
@@ -332,7 +316,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.setMessage(fmt.Sprintf("TMDB fetch complete: %d items", msg.total))
 			}
-			m.refreshVideoList()
+			m.refreshActiveView()
 			if n := m.sidebar.SelectedNode(); n != nil {
 				if cmd := m.updateCoverForNode(n); cmd != nil {
 					return m, cmd
@@ -341,6 +325,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.processNextTMDbItem()
+
+	case musicBatchProgressMsg:
+		m.musicBatchIndex = msg.current
+		m.musicBatchTotal = msg.total
+		m.setMessage(fmt.Sprintf("MusicBrainz: %d/%d fetching...", msg.current, msg.total))
+		if m.musicBatchCancelled || m.musicBatchIndex >= m.musicBatchTotal {
+			cancelled := m.musicBatchCancelled
+			m.musicBatchMode = false
+			m.musicBatchCancelled = false
+			if cancelled {
+				m.setMessage("MusicBrainz fetch cancelled")
+			} else {
+				m.setMessage(fmt.Sprintf("MusicBrainz fetch complete: %d items", msg.total))
+			}
+			m.trackList.ClearMarks()
+			m.artistDetail.ClearMarks()
+			m.refreshActiveView()
+			return m, nil
+		}
+		return m, m.processNextMusicItem()
 	case errorMsg:
 		if m.videoFetch == nil {
 			m.setMessage(string(msg))
@@ -541,6 +545,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editAlbumID = 0
 			m.editVideoFieldNames = nil
 			m.editVideoPaths = nil
+			m.musicFetchMarkedPaths = nil
+			m.musicFetchMetadata = nil
 		}
 		return m, cmd
 	}
@@ -650,6 +656,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, posterCmd, hideCursorCmd())
 	}
 
+	if m.musicFetch != nil {
+		var cmd tea.Cmd
+		m.musicFetch, cmd = m.musicFetch.Update(msg)
+		if m.musicFetch.Cancelled {
+			log.Printf("[DEBUGLOG] musicFetch Cancelled")
+			m.musicFetch = nil
+			m.musicFetchMarkedPaths = nil
+			return m, nil
+		}
+		if m.musicFetch.Submitted {
+			log.Printf("[DEBUGLOG] musicFetch Submitted! releaseInfo=%v markedCount=%d", m.musicFetch.releaseInfo != nil, len(m.musicFetchMarkedPaths))
+			m.musicFetchMetadata = m.musicFetch.releaseInfo
+			m.musicFetch = nil
+
+			if len(m.musicFetchMarkedPaths) > 1 {
+				// Multiple items: direct update (fill empty fields)
+				m.applyMusicMetadata(m.musicFetchMetadata, m.musicFetchMarkedPaths, false)
+				m.musicFetchMarkedPaths = nil
+				m.musicFetchMetadata = nil
+				return m, nil
+			} else {
+				// Single item (or 1 item marked): confirmation dialog
+				log.Printf("[DEBUGLOG] Creating confirm modal for single item metadata update")
+				m.modal = newConfirmModal("Overwrite metadata for this item?")
+				m.modal.help = "y: Yes  n: No / Esc: Cancel"
+				m.pendingAction = actionEditTrack
+				return m, nil
+			}
+		}
+		return m, cmd
+	}
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -673,6 +711,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.tmdbBatchMode {
 				m.tmdbBatchCancelled = true
 				m.message = "Cancelling TMDB fetch..."
+				return m, nil
+			}
+			if m.musicBatchMode {
+				m.musicBatchCancelled = true
+				m.message = "Cancelling MusicBrainz fetch..."
 				return m, nil
 			}
 		case "tab":
@@ -1223,13 +1266,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "ctrl+b":
-			if m.tmdbBatchMode {
+			if m.tmdbBatchMode || m.musicBatchMode {
 				return m, nil
 			}
 			videoViews := map[viewState]bool{
 				viewVideoLibrary: true, viewVideoContinue: true,
 				viewVideoRecent: true, viewVideoHealth: true, viewVideoFilter: true,
 			}
+			musicViews := map[viewState]bool{
+				viewMusicLibrary: true, viewMusicRecent: true,
+				viewMusicFilter: true, viewMusicArtists: true, viewMusicArtistDetail: true,
+			}
+
 			if !m.focusedSide && videoViews[m.activeView] {
 				marked := m.videoList.MarkedVideos()
 				if len(marked) > 0 {
@@ -1240,6 +1288,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.tmdbBatchTotal = len(marked)
 					m.setMessage("Fetching TMDB metadata...")
 					return m, m.processNextTMDbItem()
+				}
+			} else if !m.focusedSide && musicViews[m.activeView] {
+				marked := m.getMarkedMusicPaths()
+				if len(marked) > 0 {
+					m.musicBatchMode = true
+					m.musicBatchCancelled = false
+					m.musicBatchPaths = marked
+					m.musicBatchIndex = 0
+					m.musicBatchTotal = len(marked)
+					m.setMessage("Fetching MusicBrainz metadata...")
+					return m, m.processNextMusicItem()
+				}
+			}
+			return m, nil
+		case "ctrl+t":
+			if !m.focusedSide && m.musicFetch == nil {
+				musicViews := map[viewState]bool{
+					viewMusicLibrary: true, viewMusicRecent: true,
+					viewMusicFilter: true, viewMusicArtists: true, viewMusicArtistDetail: true,
+				}
+				if musicViews[m.activeView] {
+					marked := m.getMarkedMusicPaths()
+					if len(marked) > 1 {
+						m.musicBatchMode = true
+						m.musicBatchCancelled = false
+						m.musicBatchPaths = marked
+						m.musicBatchIndex = 0
+						m.musicBatchTotal = len(marked)
+						m.setMessage("Fetching MusicBrainz metadata...")
+						return m, m.processNextMusicItem()
+					}
+					query, artist, album := m.getCurrentMusicQuery()
+					m.musicFetch = newMusicFetchModal(query, artist, album)
+					m.musicFetch.SetSize(m.width, m.height)
+					m.musicFetchMarkedPaths = marked
 				}
 			}
 			return m, nil
@@ -1660,6 +1743,48 @@ func (m *model) getSidebarWidth() int {
 	return w
 }
 
+func (m *model) getMarkedMusicPaths() []string {
+	if m.activeView == viewMusicLibrary || m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
+		return m.trackList.MarkedPaths()
+	} else if m.activeView == viewMusicArtistDetail {
+		return m.artistDetail.MarkedPaths()
+	}
+	return nil
+}
+
+func (m model) getCurrentMusicQuery() (string, string, string) {
+	var query, artist, album string
+
+	if m.activeView == viewMusicArtistDetail {
+		artist = m.artistDetail.artist
+		if t, ok := m.artistDetail.SelectedTrack(); ok {
+			query = fmt.Sprintf("artist:\"%s\" AND release:\"%s\" AND recording:\"%s\"", t.Artist, t.Album, t.Title)
+			artist = t.Artist
+			album = t.Album
+		} else if a, ok := m.artistDetail.SelectedAlbum(); ok {
+			query = fmt.Sprintf("artist:\"%s\" AND release:\"%s\"", artist, a)
+			album = a
+		} else {
+			query = fmt.Sprintf("artist:\"%s\"", artist)
+		}
+	} else if m.activeView == viewMusicLibrary || m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
+		idx := m.trackList.Cursor()
+		if idx >= 0 && idx < len(m.trackList.tracks) {
+			t := m.trackList.tracks[idx]
+			query = fmt.Sprintf("artist:\"%s\" AND release:\"%s\" AND recording:\"%s\"", t.Artist, t.Album, t.Title)
+			artist = t.Artist
+			album = t.Album
+		}
+	} else if m.activeView == viewMusicArtists {
+		if a := m.musicArtists.SelectedArtist(); a != "" {
+			query = fmt.Sprintf("artist:\"%s\"", a)
+			artist = a
+		}
+	}
+
+	return query, artist, album
+}
+
 func (m *model) refreshVideoPlaylistFiles(playlistID int64) {
 	sbWidth := m.getSidebarWidth()
 	videos, _ := db.GetVideoPlaylistFiles(playlistID)
@@ -1718,9 +1843,43 @@ func (m model) getCurrentFilter() (string, string) {
 	return artist, album
 }
 
-func (m *model) refreshTrackList(artist, albumTitle string) {
+func (m *model) refreshArtistDetail() {
+	if m.activeView != viewMusicArtistDetail || m.artistDetail.artist == "" {
+		return
+	}
+	artist := m.artistDetail.artist
+	_, albums, err := db.GetMusicArtistsAndAlbums()
+	if err == nil {
+		sbWidth := m.getSidebarWidth()
+		m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-6, artist, albums[artist])
+	}
+}
+
+func (m *model) refreshActiveView() {
+	if m.activeView == viewMusicLibrary {
+		m.refreshTrackList("", "")
+	} else if m.activeView == viewMusicRecent {
+		m.refreshRecentTracks()
+	} else if m.activeView == viewMusicFilter {
+		m.refreshFilterTracks(m.currentFilterID)
+	} else if m.activeView == viewMusicArtistDetail {
+		m.refreshArtistDetail()
+	} else if m.activeView == viewVideoLibrary {
+		m.refreshVideoList()
+	} else if m.activeView == viewVideoContinue {
+		m.refreshVideoContinue()
+	} else if m.activeView == viewVideoRecent {
+		m.refreshVideoRecent()
+	} else if m.activeView == viewVideoHealth {
+		m.refreshVideoHealth()
+	} else if m.activeView == viewVideoFilter {
+		m.refreshVideoFilterTracks(m.currentVideoFilterID)
+	}
+}
+
+func (m *model) refreshTrackList(artist, album string) {
 	sbWidth := m.getSidebarWidth()
-	m.trackList = newTrackList(m.width-sbWidth-3, m.height-6, artist, albumTitle)
+	m.trackList = newTrackList(m.width-sbWidth-3, m.height-6, artist, album)
 	m.syncFocus()
 }
 
@@ -1755,6 +1914,20 @@ func (m *model) refreshVideoFilterTracks(filterID int64) {
 	videos, _ := db.GetFilteredVideos(filter.ConditionsJSON, filter.SortJSON)
 	m.videoList = newVideoListFromVideos(m.width-sbWidth-3, m.height-6, videos)
 	m.syncFocus()
+}
+
+func (m model) getCurrentMusicPath() string {
+	if m.activeView == viewMusicArtistDetail {
+		if t, ok := m.artistDetail.SelectedTrack(); ok {
+			return t.Path
+		}
+	} else if m.activeView == viewMusicLibrary || m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
+		idx := m.trackList.Cursor()
+		if idx >= 0 && idx < len(m.trackList.tracks) {
+			return m.trackList.tracks[idx].Path
+		}
+	}
+	return ""
 }
 
 func (m model) handleModalSubmit(result modalUpdateResult) model {
@@ -1822,6 +1995,20 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		m.modal = nil
 
 	case actionEditTrack:
+		if m.musicFetchMetadata != nil {
+			path := m.getCurrentMusicPath()
+			if len(m.musicFetchMarkedPaths) == 1 {
+				path = m.musicFetchMarkedPaths[0]
+			}
+			if path != "" {
+				m.applyMusicMetadata(m.musicFetchMetadata, []string{path}, true)
+			}
+			m.musicFetchMarkedPaths = nil
+			m.musicFetchMetadata = nil
+			m.modal = nil
+			m.refreshActiveView()
+			return m
+		}
 		for i, field := range m.editFieldNames {
 			val := strings.TrimSpace(result.values[i])
 			allowEmpty := field == "genre"
@@ -2580,6 +2767,11 @@ type tmdbBatchProgressMsg struct {
 	total   int
 }
 
+type musicBatchProgressMsg struct {
+	current int
+	total   int
+}
+
 func (m model) scanMusicCmd() tea.Cmd {
 	return func() tea.Msg {
 		tracks, err := library.ScanMusic(m.config.Music.Directories)
@@ -2615,7 +2807,7 @@ func (m model) processNextScanItem() tea.Cmd {
 				DiscNum:     t.DiscNum,
 				Genre:       t.Genre,
 				Duration:    t.Duration,
-			})
+			}, false)
 		} else {
 			v := m.scanVideos[m.scanIndex]
 			db.UpdateVideoFile(db.VideoData{
@@ -2675,6 +2867,114 @@ func (m model) processNextTMDbItem() tea.Cmd {
 			m.applyBatchTMDBMetadata(v.Path, meta)
 		}
 		return tmdbBatchProgressMsg{current: m.tmdbBatchIndex + 1, total: m.tmdbBatchTotal}
+	}
+}
+
+func (m model) processNextMusicItem() tea.Cmd {
+	return func() tea.Msg {
+		if m.musicBatchCancelled || m.musicBatchIndex >= len(m.musicBatchPaths) {
+			return musicBatchProgressMsg{current: m.musicBatchIndex, total: m.musicBatchTotal}
+		}
+
+		path := m.musicBatchPaths[m.musicBatchIndex]
+		track, err := db.GetMusicTrackByPath(path)
+		if err != nil {
+			return musicBatchProgressMsg{current: m.musicBatchIndex + 1, total: m.musicBatchTotal}
+		}
+
+		client := musicbrainz.NewClient()
+		// Search by Artist + Album + Title for high precision
+		query := fmt.Sprintf("artist:\"%s\" AND release:\"%s\" AND recording:\"%s\"",
+			musicbrainz.EscapeQuery(track.Artist), musicbrainz.EscapeQuery(track.Album), musicbrainz.EscapeQuery(track.Title))
+
+		recs, err := client.SearchRecordings(query)
+		if err == nil && len(recs) > 0 {
+			// Take first result and fetch full release info
+			info, err := client.GetRelease(recs[0].ReleaseID)
+			if err == nil {
+				m.applyMusicMetadata(info, []string{path}, false) // force=false (empty only)
+			}
+		}
+
+		return musicBatchProgressMsg{current: m.musicBatchIndex + 1, total: m.musicBatchTotal}
+	}
+}
+
+func (m *model) applyMusicMetadata(meta *musicbrainz.ReleaseInfo, paths []string, force bool) {
+	if meta == nil || len(paths) == 0 {
+		return
+	}
+
+	updatedCount := 0
+	for _, path := range paths {
+		track, err := db.GetMusicTrackByPath(path)
+		if err != nil {
+			continue
+		}
+
+		// Try to find matching track in metadata by track number
+		var match *musicbrainz.ReleaseTrack
+		for _, mt := range meta.Tracks {
+			if mt.Position == track.TrackNum {
+				match = &mt
+				break
+			}
+		}
+
+		// If no track number match, and it's a single track update, take the first/highlighted one?
+		// Actually, if it's a single track, we might want to let the user select the track from the list.
+		// For now, let's assume if it's single, we match by whatever we have or just album info.
+
+		title := track.Title
+		if match != nil {
+			title = match.Title
+		}
+
+		// Prepare updated track data
+		newTrack := db.TrackData{
+			Path:        track.Path,
+			MTime:       track.MTime,
+			Title:       title,
+			Artist:      meta.Artist,
+			Album:       meta.Title,
+			AlbumArtist: meta.Artist,
+			TrackNum:    track.TrackNum,
+			DiscNum:     track.DiscNum,
+			Genre:       track.Genre,
+			Duration:    track.Duration,
+		}
+
+		if err := db.UpdateMusicTrack(newTrack, force); err == nil {
+			updatedCount++
+			// Update album-level info too
+			if albumID, err := db.GetAlbumIDByTrackPath(path); err == nil {
+				db.UpdateAlbumMBID(albumID, meta.ID, force)
+				db.UpdateAlbumDate(albumID, meta.Date, force)
+
+				// Fetch cover in background if MBID is available
+				if meta.ID != "" {
+					go func(aid int64, mid string) {
+						library.FetchAndCacheMBICover(aid, mid)
+					}(albumID, meta.ID)
+				}
+			}
+		}
+	}
+
+	m.setMessage(fmt.Sprintf("Applied metadata to %d track(s)", updatedCount))
+	if updatedCount > 0 {
+		db.DeleteEmptyAlbums()
+	}
+	
+	// Refresh view
+	if m.activeView == viewMusicLibrary {
+		artist, album := m.getCurrentFilter()
+		m.refreshTrackList(artist, album)
+	} else if m.activeView == viewMusicArtistDetail {
+		// Re-load current artist/album
+		if n := m.sidebar.SelectedNode(); n != nil {
+			m.handleSidebarChange(n)
+		}
 	}
 }
 
@@ -2826,7 +3126,14 @@ func (m model) View() tea.View {
 
 	// If any modal is active, overlay it
 	var overlay string
-	if m.videoFetch != nil {
+	if m.musicFetch != nil {
+		mw := 100
+		mh := 25
+		if mw > m.width-4 { mw = m.width - 4 }
+		if mh > m.height-4 { mh = m.height - 4 }
+		m.musicFetch.SetSize(mw, mh)
+		overlay = m.musicFetch.View()
+	} else if m.videoFetch != nil {
 		m.videoFetch.SetSize(m.width-10, m.height-6)
 		overlay = m.videoFetch.View()
 	} else if m.videoEdit != nil {
@@ -2973,6 +3280,25 @@ func (m model) renderHeader() string {
 }
 
 func (m model) renderFooter() string {
+	if m.modal != nil && m.modal.Active() {
+		log.Printf("[DEBUGLOG] renderFooter: Modal active, help=%q", m.modal.help)
+		return lipgloss.NewStyle().
+			Width(m.width - 5).
+			Border(lipgloss.NormalBorder(), true, false, false, false).
+			BorderForeground(lipgloss.Color("240")).
+			Padding(0, 2).
+			Render(lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(m.modal.help))
+	}
+
+	if m.musicFetch != nil {
+		return lipgloss.NewStyle().
+			Width(m.width - 5).
+			Border(lipgloss.NormalBorder(), true, false, false, false).
+			BorderForeground(lipgloss.Color("240")).
+			Padding(0, 2).
+			Render(lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(m.musicFetch.help))
+	}
+
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
 

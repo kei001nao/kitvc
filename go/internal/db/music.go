@@ -3,6 +3,8 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
+	"golang.org/x/text/unicode/norm"
 )
 
 type TrackData struct {
@@ -25,38 +27,143 @@ type Album struct {
 	ReleaseDate string
 }
 
-func UpdateMusicTrack(t TrackData) error {
-	// 1. Ensure Album exists
-	var albumID int64
-	err := db.QueryRow("SELECT id FROM music_albums WHERE artist = ? AND title = ?", t.Artist, t.Album).Scan(&albumID)
-	if err == sql.ErrNoRows {
-		res, err := db.Exec("INSERT INTO music_albums (artist, title) VALUES (?, ?)", t.Artist, t.Album)
-		if err != nil {
-			return fmt.Errorf("failed to insert album: %w", err)
+func normalizeString(s string) string {
+	return norm.NFKC.String(s)
+}
+
+func getBaseAlbumName(album string) string {
+	for _, sep := range []string{" : ", ": ", " (", " [", " ~"} {
+		if idx := strings.Index(album, sep); idx > 0 {
+			return strings.TrimSpace(album[:idx])
 		}
-		albumID, _ = res.LastInsertId()
-	} else if err != nil {
-		return fmt.Errorf("failed to query album: %w", err)
+	}
+	return album
+}
+
+func UpdateMusicTrack(t TrackData, force bool) error {
+	// Normalize strings to avoid duplicates due to full-width/half-width differences
+	t.Artist = normalizeString(t.Artist)
+	t.Album = normalizeString(t.Album)
+	t.Title = normalizeString(t.Title)
+
+	var albumID int64
+	var existingTitle string
+	var err error
+
+	// 1. If not forcing, check if track already exists and has an album_id
+	if !force {
+		err = db.QueryRow("SELECT album_id, artist, album, title FROM music_tracks WHERE path = ?", t.Path).Scan(&albumID, &t.Artist, &t.Album, &t.Title)
+		if err == nil && albumID != 0 {
+			// Track exists, use existing names and albumID
+			goto updateTrack
+		}
 	}
 
-	// 2. Insert track; on conflict only overwrite empty/NULL fields
-	_, err = db.Exec(`
-		INSERT INTO music_tracks (
-			path, mtime, title, artist, album, album_artist, 
-			track_num, disc_num, genre, duration, album_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(path) DO UPDATE SET
-			mtime = excluded.mtime,
-			title = CASE WHEN title IS NULL OR title = '' THEN excluded.title ELSE title END,
-			artist = CASE WHEN artist IS NULL OR artist = '' THEN excluded.artist ELSE artist END,
-			album = CASE WHEN album IS NULL OR album = '' THEN excluded.album ELSE album END,
-			album_artist = CASE WHEN album_artist IS NULL OR album_artist = '' THEN excluded.album_artist ELSE album_artist END,
-			track_num = CASE WHEN track_num IS NULL THEN excluded.track_num ELSE track_num END,
-			disc_num = CASE WHEN disc_num IS NULL THEN excluded.disc_num ELSE disc_num END,
-			genre = CASE WHEN genre IS NULL OR genre = '' THEN excluded.genre ELSE genre END,
-			duration = CASE WHEN duration IS NULL THEN excluded.duration ELSE duration END
-	`, t.Path, t.MTime, t.Title, t.Artist, t.Album, t.AlbumArtist,
-		t.TrackNum, t.DiscNum, t.Genre, t.Duration, albumID)
+	// 2. Ensure Album exists
+	err = db.QueryRow("SELECT id, title FROM music_albums WHERE artist = ? AND title = ?", t.Artist, t.Album).Scan(&albumID, &existingTitle)
+	if err == sql.ErrNoRows {
+		// Try more flexible matching in Go
+		rows, errQuery := db.Query("SELECT id, title FROM music_albums WHERE artist = ?", t.Artist)
+		if errQuery == nil {
+			defer rows.Close()
+			targetNorm := t.Album
+			targetBase := getBaseAlbumName(targetNorm)
+
+			for rows.Next() {
+				var id int64
+				var title string
+				if errScan := rows.Scan(&id, &title); errScan != nil {
+					continue
+				}
+
+				dbNorm := normalizeString(title)
+				if dbNorm == targetNorm {
+					albumID = id
+					existingTitle = title
+					break
+				}
+
+				dbBase := getBaseAlbumName(dbNorm)
+				if dbBase == targetBase || dbBase == targetNorm || dbNorm == targetBase {
+					albumID = id
+					existingTitle = title
+					break
+				}
+			}
+		}
+
+		if albumID != 0 {
+			// Found via flexible matching
+			t.Album = existingTitle
+			err = nil
+		} else {
+			// Still not found, create new one
+			res, errExec := db.Exec("INSERT INTO music_albums (artist, title) VALUES (?, ?)", t.Artist, t.Album)
+			if errExec != nil {
+				return fmt.Errorf("failed to insert album: %w", errExec)
+			}
+			albumID, _ = res.LastInsertId()
+			err = nil
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to query album: %w", err)
+	} else {
+		// Found exact match, use the title from DB to ensure same casing/normalization
+		t.Album = existingTitle
+	}
+
+updateTrack:
+	// Double check cover art inheritance if we are about to delete an old record or merge
+	var currentAlbumID int64
+	var currentCoverPath sql.NullString
+	err = db.QueryRow("SELECT album_id, a.cover_path FROM music_tracks t JOIN music_albums a ON t.album_id = a.id WHERE t.path = ?", t.Path).Scan(&currentAlbumID, &currentCoverPath)
+	if err == nil && currentAlbumID != albumID && currentCoverPath.Valid && currentCoverPath.String != "" {
+		// Moving track to a different album entry, migrate cover if target has none
+		db.Exec("UPDATE music_albums SET cover_path = ? WHERE id = ? AND (cover_path IS NULL OR cover_path = '')", currentCoverPath.String, albumID)
+	}
+
+	if force {
+		// Full overwrite
+		_, err = db.Exec(`
+			INSERT INTO music_tracks (
+				path, mtime, title, artist, album, album_artist, 
+				track_num, disc_num, genre, duration, album_id
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(path) DO UPDATE SET
+				mtime = excluded.mtime,
+				title = excluded.title,
+				artist = excluded.artist,
+				album = excluded.album,
+				album_artist = excluded.album_artist,
+				track_num = excluded.track_num,
+				disc_num = excluded.disc_num,
+				genre = excluded.genre,
+				duration = excluded.duration,
+				album_id = excluded.album_id
+		`, t.Path, t.MTime, t.Title, t.Artist, t.Album, t.AlbumArtist,
+			t.TrackNum, t.DiscNum, t.Genre, t.Duration, albumID)
+	} else {
+		// Insert track; on conflict only overwrite empty/NULL fields, 
+		// and PROTECT album_id/names if they already exist.
+		_, err = db.Exec(`
+			INSERT INTO music_tracks (
+				path, mtime, title, artist, album, album_artist, 
+				track_num, disc_num, genre, duration, album_id
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(path) DO UPDATE SET
+				mtime = excluded.mtime,
+				title = CASE WHEN title IS NULL OR title = '' THEN excluded.title ELSE title END,
+				artist = CASE WHEN artist IS NULL OR artist = '' THEN excluded.artist ELSE artist END,
+				album = CASE WHEN album IS NULL OR album = '' THEN excluded.album ELSE album END,
+				album_artist = CASE WHEN album_artist IS NULL OR album_artist = '' THEN excluded.album_artist ELSE album_artist END,
+				track_num = CASE WHEN track_num IS NULL THEN excluded.track_num ELSE track_num END,
+				disc_num = CASE WHEN disc_num IS NULL THEN excluded.disc_num ELSE disc_num END,
+				genre = CASE WHEN genre IS NULL OR genre = '' THEN excluded.genre ELSE genre END,
+				duration = CASE WHEN duration IS NULL THEN excluded.duration ELSE duration END,
+				album_id = CASE WHEN album_id IS NULL OR album_id = 0 THEN excluded.album_id ELSE album_id END
+		`, t.Path, t.MTime, t.Title, t.Artist, t.Album, t.AlbumArtist,
+			t.TrackNum, t.DiscNum, t.Genre, t.Duration, albumID)
+	}
 
 	if err != nil {
 		return fmt.Errorf("failed to insert track: %w", err)
@@ -65,6 +172,23 @@ func UpdateMusicTrack(t TrackData) error {
 	return nil
 }
 
+func UpdateAlbumMBID(albumID int64, mbid string, force bool) error {
+	if force {
+		_, err := db.Exec("UPDATE music_albums SET mbid = ? WHERE id = ?", mbid, albumID)
+		return err
+	}
+	_, err := db.Exec("UPDATE music_albums SET mbid = ? WHERE id = ? AND (mbid IS NULL OR mbid = '')", mbid, albumID)
+	return err
+}
+
+func UpdateAlbumDate(albumID int64, date string, force bool) error {
+	if force {
+		_, err := db.Exec("UPDATE music_albums SET release_date = ? WHERE id = ?", date, albumID)
+		return err
+	}
+	_, err := db.Exec("UPDATE music_albums SET release_date = ? WHERE id = ? AND (release_date IS NULL OR release_date = '')", date, albumID)
+	return err
+}
 func CreateMusicPlaylist(name string) error {
 	_, err := db.Exec("INSERT INTO music_playlists (name) VALUES (?)", name)
 	return err
@@ -324,6 +448,11 @@ func GetMusicPlaylists() ([]Playlist, error) {
 		playlists = append(playlists, p)
 	}
 	return playlists, nil
+}
+
+func DeleteEmptyAlbums() error {
+	_, err := db.Exec("DELETE FROM music_albums WHERE id NOT IN (SELECT DISTINCT album_id FROM music_tracks)")
+	return err
 }
 
 func UpdateAlbumCover(albumID int64, coverPath string) error {
