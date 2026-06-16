@@ -435,7 +435,7 @@ func (s sidebar) View(focused bool) string {
 	}
 
 	// Push cover to bottom of sidebar area
-	padding := s.height - treeLines - coverLines
+	padding := s.height - treeLines - coverLines + 1
 	if padding < 0 {
 		padding = 0
 	}

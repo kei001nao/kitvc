@@ -122,6 +122,14 @@ type model struct {
 	filterEdit        *filterEditModal
 	filterCondEdit    *filterConditionModal
 	sortFieldSelect   *sortFieldSelectModal
+	scanning          bool
+	scanCancelled     bool
+	scanTracks        []library.Track
+	scanVideos        []library.Video
+	scanIndex         int
+	scanTotal         int
+	scanPhase         string
+	messageTime       time.Time
 }
 
 func InitialModel(cfg *config.Config) model {
@@ -190,6 +198,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	}
 
+	// Auto-clear timed messages after 3 seconds
+	if m.message != "" && !m.messageTime.IsZero() && time.Since(m.messageTime) > 3*time.Second {
+		m.message = ""
+		m.messageTime = time.Time{}
+	}
+
 	switch msg := msg.(type) {
 	case tmdbMetadataMsg:
 		log.Printf("[DEBUGLOG] tmdbMetadataMsg received")
@@ -215,9 +229,69 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.syncPosterCmd()
 		}
 		return m, nil
+	case scanProgressMsg:
+		m.scanIndex = msg.current
+		m.scanTotal = msg.total
+		prefix := "Scanning music"
+		if m.scanPhase == "video" {
+			prefix = "Scanning video"
+		}
+		m.message = fmt.Sprintf("%s... %d/%d", prefix, msg.current, msg.total)
+		if m.scanCancelled || m.scanIndex >= m.scanTotal {
+			m.scanning = false
+			m.scanCancelled = false
+			m.message = ""
+			if m.scanPhase == "music" {
+				if err := library.ProcessAllAlbumCovers(); err != nil {
+					m.setMessage(err.Error())
+				}
+			}
+			if m.activeView == viewMusicLibrary {
+				m.refreshTrackList("", "")
+			} else if m.activeView == viewMusicRecent {
+				m.refreshRecentTracks()
+			} else if m.activeView == viewMusicFilter {
+				m.refreshFilterTracks(m.currentFilterID)
+			} else if m.activeView == viewVideoLibrary {
+				m.refreshVideoList()
+			} else if m.activeView == viewVideoContinue {
+				m.refreshVideoContinue()
+			} else if m.activeView == viewVideoRecent {
+				m.refreshVideoRecent()
+			} else if m.activeView == viewVideoHealth {
+				m.refreshVideoHealth()
+			}
+			if n := m.sidebar.SelectedNode(); n != nil {
+				if cmd := m.updateCoverForNode(n); cmd != nil {
+					return m, cmd
+				}
+			}
+			return m, nil
+		}
+		return m, m.processNextScanItem()
+	case scanReadyMsg:
+		if len(msg.tracks) > 0 {
+			m.scanning = true
+			m.scanCancelled = false
+			m.scanPhase = "music"
+			m.scanTracks = msg.tracks
+			m.scanIndex = 0
+			m.scanTotal = len(msg.tracks)
+			return m, m.processNextScanItem()
+		} else if len(msg.videos) > 0 {
+			m.scanning = true
+			m.scanCancelled = false
+			m.scanPhase = "video"
+			m.scanVideos = msg.videos
+			m.scanIndex = 0
+			m.scanTotal = len(msg.videos)
+			return m, m.processNextScanItem()
+		}
+		m.setMessage("No files found")
+		return m, nil
 	case scanFinishedMsg:
 		log.Printf("[DEBUGLOG] scanFinishedMsg received: count=%d", msg.count)
-		m.message = fmt.Sprintf("Scan finished: %d items found", msg.count)
+		m.setMessage(fmt.Sprintf("Scan finished: %d items found", msg.count))
 		if m.activeView == viewMusicLibrary {
 			m.refreshTrackList("", "")
 		} else if m.activeView == viewMusicRecent {
@@ -242,7 +316,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case errorMsg:
 		if m.videoFetch == nil {
-			m.message = string(msg)
+			m.setMessage(string(msg))
 			return m, nil
 		}
 	}
@@ -372,7 +446,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.pendingAction == actionCreateMusicFilter {
 					newID, err := db.CreateMusicFilter(result.name, result.condJSON, result.sortJSON)
 					if err == nil {
-						m.message = fmt.Sprintf("Created view '%s'", result.name)
+						m.setMessage(fmt.Sprintf("Created view '%s'", result.name))
 						m.currentFilterID = newID
 						m.currentFilterName = result.name
 						m.sidebar.Refresh()
@@ -383,7 +457,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				} else if m.pendingAction == actionEditMusicFilter {
 					db.UpdateMusicFilter(m.currentFilterID, result.name, result.condJSON, result.sortJSON)
-					m.message = fmt.Sprintf("Updated view '%s'", result.name)
+					m.setMessage(fmt.Sprintf("Updated view '%s'", result.name))
 					m.currentFilterName = result.name
 					m.sidebar.Refresh()
 					m.sidebar.ExpandByID("music_views")
@@ -392,7 +466,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else if m.pendingAction == actionCreateVideoFilter {
 					newID, err := db.CreateVideoFilter(result.name, result.condJSON, result.sortJSON)
 					if err == nil {
-						m.message = fmt.Sprintf("Created view '%s'", result.name)
+						m.setMessage(fmt.Sprintf("Created view '%s'", result.name))
 						m.currentVideoFilterID = newID
 						m.currentVideoFilterName = result.name
 						m.sidebar.Refresh()
@@ -403,7 +477,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				} else if m.pendingAction == actionEditVideoFilter {
 					db.UpdateVideoFilter(m.currentVideoFilterID, result.name, result.condJSON, result.sortJSON)
-					m.message = fmt.Sprintf("Updated view '%s'", result.name)
+					m.setMessage(fmt.Sprintf("Updated view '%s'", result.name))
 					m.currentVideoFilterName = result.name
 					m.sidebar.Refresh()
 					m.sidebar.ExpandByID("video_views")
@@ -523,7 +597,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if apiKey == "" {
-				m.message = "TMDB API Key not set in config.toml or TMDB_API_KEY env"
+				m.setMessage("TMDB API Key not set in config.toml or TMDB_API_KEY env")
 				return m, tea.Batch(cmd, clearCmd, hideCursorCmd())
 			}
 
@@ -553,7 +627,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case errorMsg:
-		m.message = string(msg)
+		m.setMessage(string(msg))
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -563,6 +637,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.saveUIState()
 			return m, tea.Quit
+		case "esc":
+			if m.scanning {
+				m.scanCancelled = true
+				m.message = "Cancelling scan..."
+				return m, nil
+			}
 		case "tab":
 			m.focusedSide = !m.focusedSide
 			m.syncFocus()
@@ -610,6 +690,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "s":
+			if m.scanning {
+				return m, nil
+			}
 			m.message = "Scanning..."
 			if m.activeView == viewVideoLibrary || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
 				return m, m.scanVideoCmd()
@@ -677,7 +760,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						_, albums, err := db.GetMusicArtistsAndAlbums()
 						if err == nil {
 							sbWidth := m.getSidebarWidth()
-							m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-5, selectedArtist, albums[selectedArtist])
+							m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-6, selectedArtist, albums[selectedArtist])
 							m.focusedSide = false
 							m.syncFocus()
 						}
@@ -1183,17 +1266,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progress.SetWidth(m.width - 20)
 
 		sbWidth := m.getSidebarWidth()
-		m.sidebar.SetSize(sbWidth, m.height-5)
+	middleHeight := m.height - 6
+	if middleHeight < 1 {
+		middleHeight = 1
+	}
+	m.sidebar.SetSize(sbWidth, middleHeight)
 
-		mainWidth := m.width - sbWidth - 2
-		if mainWidth <= 0 {
-			mainWidth = 1
-		}
+	mainWidth := m.width - sbWidth - 2
+	if mainWidth <= 0 {
+		mainWidth = 1
+	}
 
-		m.trackList.SetSize(mainWidth-1, m.height-5)
-		m.videoList.SetSize(mainWidth-1, m.height-5)
-		m.musicArtists.SetSize(mainWidth-1, m.height-5)
-		m.artistDetail.SetSize(mainWidth-1, m.height-5)
+	m.trackList.SetSize(mainWidth-1, middleHeight)
+	m.videoList.SetSize(mainWidth-1, middleHeight)
+	m.musicArtists.SetSize(mainWidth-1, middleHeight)
+	m.artistDetail.SetSize(mainWidth-1, middleHeight)
 		if m.videoFetch != nil {
 			m.videoFetch.SetSize(m.width-10, m.height-6)
 			m.videoFetch.ClearDisplayed()
@@ -1427,7 +1514,7 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 		artists, _, err := db.GetMusicArtistsAndAlbums()
 		if err == nil {
 			sbWidth := m.getSidebarWidth()
-			m.musicArtists = newMusicArtists(m.width-sbWidth-3, m.height-5, artists)
+			m.musicArtists = newMusicArtists(m.width-sbWidth-3, m.height-6, artists)
 		}
 	case n.id == "music_recent":
 		m.activeView = viewMusicRecent
@@ -1450,7 +1537,7 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 		_, albums, err := db.GetMusicArtistsAndAlbums()
 		if err == nil {
 			sbWidth := m.getSidebarWidth()
-			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-5, artist, albums[artist])
+			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-6, artist, albums[artist])
 		}
 	case strings.HasPrefix(n.id, "album:"):
 		artist, albumTitle := m.getCurrentFilter()
@@ -1622,7 +1709,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 	case actionCreatePlaylist:
 		name := result.text
 		db.CreateMusicPlaylist(name)
-		m.message = fmt.Sprintf("Created playlist '%s'", name)
+		m.setMessage(fmt.Sprintf("Created playlist '%s'", name))
 		m.sidebar.Refresh()
 		if len(m.pendingTracks) > 0 {
 			playlists, _ := db.GetMusicPlaylists()
@@ -1631,7 +1718,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 					for _, tp := range m.pendingTracks {
 						db.AddTrackToMusicPlaylist(p.ID, tp)
 					}
-					m.message = fmt.Sprintf("Created playlist '%s' and added %d track(s)", name, len(m.pendingTracks))
+					m.setMessage(fmt.Sprintf("Created playlist '%s' and added %d track(s)", name, len(m.pendingTracks)))
 					break
 				}
 			}
@@ -1655,7 +1742,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 				for _, tp := range m.pendingTracks {
 					db.AddTrackToMusicPlaylist(p.ID, tp)
 				}
-				m.message = fmt.Sprintf("Added to '%s'", p.Name)
+				m.setMessage(fmt.Sprintf("Added to '%s'", p.Name))
 				break
 			}
 		}
@@ -1665,7 +1752,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 
 	case actionDeletePlaylist:
 		db.DeleteMusicPlaylist(m.currentPlaylistID)
-		m.message = "Deleted playlist"
+		m.setMessage("Deleted playlist")
 		m.currentPlaylistID = 0
 		m.sidebar.Refresh()
 		m.trackList.ClearMarks()
@@ -1676,7 +1763,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		for _, tp := range m.pendingTracks {
 			db.RemoveTrackFromMusicPlaylist(m.currentPlaylistID, tp)
 		}
-		m.message = "Removed from playlist"
+		m.setMessage("Removed from playlist")
 		m.refreshPlaylistTracks(m.currentPlaylistID)
 		m.trackList.ClearMarks()
 		m.modal = nil
@@ -1704,7 +1791,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 				db.UpdateTrackMTime(path, float64(time.Now().Unix()))
 			}
 		}
-		m.message = fmt.Sprintf("Updated %d track(s)", len(m.editPaths))
+		m.setMessage(fmt.Sprintf("Updated %d track(s)", len(m.editPaths)))
 		m.modal = nil
 		m.editFieldNames = nil
 		m.editPaths = nil
@@ -1718,7 +1805,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 			trackCursor := m.artistDetail.tracksTable.GetHighlightedRowIndex()
 			wasFocusedUpper := m.artistDetail.focusedUpper
 			wasFocused := m.focusedSide
-			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-5, m.artistDetail.artist, m.artistDetail.albums)
+			m.artistDetail = newMusicArtistDetail(m.width-sbWidth-3, m.height-6, m.artistDetail.artist, m.artistDetail.albums)
 			if albumCursor >= 0 && albumCursor < len(m.artistDetail.albums) {
 				m.artistDetail.albumsTable = m.artistDetail.albumsTable.WithHighlightedRow(albumCursor)
 				m.artistDetail.loadTracksForAlbum(m.artistDetail.albums[albumCursor].Title)
@@ -1741,7 +1828,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		newGenre := strings.TrimSpace(result.values[3])
 
 		if newArtist == "" {
-			m.message = "Artist name cannot be empty"
+			m.setMessage("Artist name cannot be empty")
 			m.modal = nil
 			m.editFieldNames = nil
 			m.editPaths = nil
@@ -1753,7 +1840,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		origArtist, origAlbum, _ = db.GetAlbumArtistTitle(m.editAlbumID)
 
 		if err := db.UpdateAlbumMetadata(m.editAlbumID, newArtist, newAlbum, newDate); err != nil {
-			m.message = fmt.Sprintf("Failed to update album: %v", err)
+			m.setMessage(fmt.Sprintf("Failed to update album: %v", err))
 			log.Printf("UpdateAlbumMetadata failed: %v", err)
 			m.modal = nil
 			m.editFieldNames = nil
@@ -1777,7 +1864,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 			db.UpdateTrackMTime(path, float64(time.Now().Unix()))
 		}
 
-		m.message = fmt.Sprintf("Updated album: %s - %s", newArtist, newAlbum)
+		m.setMessage(fmt.Sprintf("Updated album: %s - %s", newArtist, newAlbum))
 
 		needsTreeRebuild := newArtist != origArtist || newAlbum != origAlbum
 
@@ -1848,7 +1935,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 
 	case actionDeleteMusicFilter:
 		db.DeleteMusicFilter(m.currentFilterID)
-		m.message = fmt.Sprintf("Deleted view '%s'", m.currentFilterName)
+		m.setMessage(fmt.Sprintf("Deleted view '%s'", m.currentFilterName))
 		m.currentFilterID = 0
 		m.currentFilterName = ""
 		m.activeView = viewMusicArtists
@@ -1860,7 +1947,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 
 	case actionDeleteVideoFilter:
 		db.DeleteVideoFilter(m.currentVideoFilterID)
-		m.message = fmt.Sprintf("Deleted view '%s'", m.currentVideoFilterName)
+		m.setMessage(fmt.Sprintf("Deleted view '%s'", m.currentVideoFilterName))
 		m.currentVideoFilterID = 0
 		m.currentVideoFilterName = ""
 		m.activeView = viewVideoLibrary
@@ -1881,9 +1968,9 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 			}
 		}
 		if updated > 0 {
-			m.message = fmt.Sprintf("Updated %d video(s)", len(m.editVideoPaths))
+			m.setMessage(fmt.Sprintf("Updated %d video(s)", len(m.editVideoPaths)))
 		} else {
-			m.message = "No changes"
+			m.setMessage("No changes")
 		}
 		m.modal = nil
 		m.editVideoFieldNames = nil
@@ -1905,7 +1992,7 @@ func (m model) handleVideoFetchSubmit() (model, tea.Cmd) {
 	episode := m.videoFetch.SelectedEpisode
 	client := m.videoFetch.client
 
-	m.message = "Fetching TMDB metadata..."
+	m.setMessage("Fetching TMDB metadata...")
 
 	return m, func() tea.Msg {
 		meta, err := client.FetchVideoMetadataByID(id, isTV, season, episode)
@@ -2006,7 +2093,7 @@ func (m *model) applyTMDBMetadata(meta *tmdb.VideoMetadata) {
 		}
 	}
 
-	m.message = fmt.Sprintf("Applied: %s", meta.Title)
+	m.setMessage(fmt.Sprintf("Applied: %s", meta.Title))
 }
 
 func (m model) handleVideoEditSubmit(values []string) model {
@@ -2033,9 +2120,9 @@ func (m model) handleVideoEditSubmit(values []string) model {
 	}
 
 	if len(m.editVideoPaths) > 0 {
-		m.message = fmt.Sprintf("Updated %d video(s)", len(m.editVideoPaths))
+		m.setMessage(fmt.Sprintf("Updated %d video(s)", len(m.editVideoPaths)))
 	} else {
-		m.message = "No changes"
+		m.setMessage("No changes")
 	}
 	m.pendingAction = actionNone
 	m.editVideoFieldNames = nil
@@ -2421,17 +2508,46 @@ func loadUIStateCmd() tea.Cmd {
 }
 
 type scanFinishedMsg struct {
-	count int
+	count     int
+	cancelled bool
 }
+
+type scanProgressMsg struct {
+	current int
+	total   int
+}
+
+type scanReadyMsg struct {
+	tracks []library.Track
+	videos []library.Video
+}
+
+
 
 func (m model) scanMusicCmd() tea.Cmd {
 	return func() tea.Msg {
 		tracks, err := library.ScanMusic(m.config.Music.Directories)
 		if err != nil {
-			return scanFinishedMsg{count: 0}
+			return scanReadyMsg{}
 		}
+		return scanReadyMsg{tracks: tracks}
+	}
+}
 
-		for _, t := range tracks {
+func (m model) scanVideoCmd() tea.Cmd {
+	return func() tea.Msg {
+		videos, err := library.ScanVideo(m.config.Video.Directories)
+		if err != nil {
+			return scanReadyMsg{}
+		}
+		return scanReadyMsg{videos: videos}
+	}
+}
+
+func (m model) processNextScanItem() tea.Cmd {
+	return func() tea.Msg {
+		if m.scanPhase == "music" {
+			t := m.scanTracks[m.scanIndex]
 			db.UpdateMusicTrack(db.TrackData{
 				Path:        t.Path,
 				MTime:       t.MTime,
@@ -2444,23 +2560,8 @@ func (m model) scanMusicCmd() tea.Cmd {
 				Genre:       t.Genre,
 				Duration:    t.Duration,
 			})
-		}
-
-		// Process album covers after scan
-		library.ProcessAllAlbumCovers()
-
-		return scanFinishedMsg{count: len(tracks)}
-	}
-}
-
-func (m model) scanVideoCmd() tea.Cmd {
-	return func() tea.Msg {
-		videos, err := library.ScanVideo(m.config.Video.Directories)
-		if err != nil {
-			return scanFinishedMsg{count: 0}
-		}
-
-		for _, v := range videos {
+		} else {
+			v := m.scanVideos[m.scanIndex]
 			db.UpdateVideoFile(db.VideoData{
 				Path:     v.Path,
 				Filename: v.Filename,
@@ -2470,9 +2571,13 @@ func (m model) scanVideoCmd() tea.Cmd {
 				MTime:    v.MTime,
 			})
 		}
-
-		return scanFinishedMsg{count: len(videos)}
+		return scanProgressMsg{current: m.scanIndex + 1, total: m.scanTotal}
 	}
+}
+
+func (m *model) setMessage(text string) {
+	m.message = text
+	m.messageTime = time.Now()
 }
 
 func formatDuration(seconds int) string {
@@ -2497,9 +2602,13 @@ func (m model) View() tea.View {
 		mainWidth = 1
 	}
 
+	middleHeight := m.height - 6
+	if middleHeight < 1 {
+		middleHeight = 1
+	}
 	mainStyle := lipgloss.NewStyle().
 		Width(mainWidth).
-		Height(m.height - 5). // Adjusted for header and footer
+		Height(middleHeight).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(lipgloss.Color("240"))
 
@@ -2524,11 +2633,22 @@ func (m model) View() tea.View {
 		mainContentStr = "Unknown View"
 	}
 
+	// Join sidebar and main content, then force-truncate/pad to middleHeight.
+	// This is critical because lipgloss.Height(n) sets a minimum, not a maximum,
+	// so child views returning more than middleHeight lines would overflow the
+	// total terminal height and push the footer off-screen.
+	midSection := lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr))
+	if midLines := strings.Split(midSection, "\n"); len(midLines) > middleHeight {
+		midSection = strings.Join(midLines[:middleHeight], "\n")
+	} else {
+		midSection = lipgloss.NewStyle().Height(middleHeight).Render(midSection)
+	}
+
 	footer := m.renderFooter()
 
 	backgroundView := lipgloss.JoinVertical(lipgloss.Left,
 		header,
-		lipgloss.JoinHorizontal(lipgloss.Top, sbView, mainStyle.Render(mainContentStr)),
+		midSection,
 		footer,
 	)
 
@@ -2627,26 +2747,22 @@ func (m model) isAnyInputFocused() bool {
 }
 
 func (m model) renderHeader() string {
-	if m.currentTrack == "" {
-		volStr := fmt.Sprintf("Vol: %d%%", int(m.volume))
-		return lipgloss.NewStyle().
-			Width(m.width - 5).
-			Height(3).
-			Border(lipgloss.NormalBorder(), false, false, true, false).
-			BorderForeground(lipgloss.Color("240")).
-			Padding(0, 2).
-			Render("Nothing playing  |  " + volStr)
-	}
-
 	percent := 0.0
 	if m.duration > 0 {
 		percent = m.playbackPos / m.duration
 	}
 
 	progressStr := m.progress.ViewAs(percent)
-	timeStr := fmt.Sprintf("%s / %s", formatDuration(int(m.playbackPos)), formatDuration(int(m.duration)))
-
 	volStr := fmt.Sprintf("Vol: %d%%", int(m.volume))
+
+	var nameStr, timeStr string
+	if m.currentTrack == "" {
+		nameStr = "Nothing playing"
+		timeStr = "0:00 / 0:00"
+	} else {
+		nameStr = m.currentTrack
+		timeStr = fmt.Sprintf("%s / %s", formatDuration(int(m.playbackPos)), formatDuration(int(m.duration)))
+	}
 
 	availWidth := m.width - 4
 	fixedWidth := len(timeStr) + len(volStr) + 12
@@ -2654,7 +2770,6 @@ func (m model) renderHeader() string {
 	if maxNameWidth < 10 {
 		maxNameWidth = 10
 	}
-	nameStr := m.currentTrack
 	if len(nameStr) > maxNameWidth {
 		nameStr = nameStr[:maxNameWidth-3] + "..."
 	}
@@ -2712,10 +2827,18 @@ func (m model) renderFooter() string {
 
 	helpStr := strings.Join(helpParts, "  ")
 
+	var lines string
+	if m.message != "" {
+		msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+		lines = msgStyle.Render(m.message)
+	} else {
+		lines = helpStr
+	}
+
 	return lipgloss.NewStyle().
 		Width(m.width - 5).
 		Border(lipgloss.NormalBorder(), true, false, false, false).
 		BorderForeground(lipgloss.Color("240")).
 		Padding(0, 2).
-		Render(helpStr)
+		Render(lines)
 }

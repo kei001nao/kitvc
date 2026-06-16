@@ -39,12 +39,22 @@ func UpdateMusicTrack(t TrackData) error {
 		return fmt.Errorf("failed to query album: %w", err)
 	}
 
-	// 2. Insert or replace track
+	// 2. Insert track; on conflict only overwrite empty/NULL fields
 	_, err = db.Exec(`
-		INSERT OR REPLACE INTO music_tracks (
+		INSERT INTO music_tracks (
 			path, mtime, title, artist, album, album_artist, 
 			track_num, disc_num, genre, duration, album_id
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET
+			mtime = excluded.mtime,
+			title = CASE WHEN title IS NULL OR title = '' THEN excluded.title ELSE title END,
+			artist = CASE WHEN artist IS NULL OR artist = '' THEN excluded.artist ELSE artist END,
+			album = CASE WHEN album IS NULL OR album = '' THEN excluded.album ELSE album END,
+			album_artist = CASE WHEN album_artist IS NULL OR album_artist = '' THEN excluded.album_artist ELSE album_artist END,
+			track_num = CASE WHEN track_num IS NULL THEN excluded.track_num ELSE track_num END,
+			disc_num = CASE WHEN disc_num IS NULL THEN excluded.disc_num ELSE disc_num END,
+			genre = CASE WHEN genre IS NULL OR genre = '' THEN excluded.genre ELSE genre END,
+			duration = CASE WHEN duration IS NULL THEN excluded.duration ELSE duration END
 	`, t.Path, t.MTime, t.Title, t.Artist, t.Album, t.AlbumArtist,
 		t.TrackNum, t.DiscNum, t.Genre, t.Duration, albumID)
 
@@ -317,7 +327,7 @@ func GetMusicPlaylists() ([]Playlist, error) {
 }
 
 func UpdateAlbumCover(albumID int64, coverPath string) error {
-	_, err := db.Exec("UPDATE music_albums SET cover_path = ? WHERE id = ?", coverPath, albumID)
+	_, err := db.Exec("UPDATE music_albums SET cover_path = ? WHERE id = ? AND (cover_path IS NULL OR cover_path = '')", coverPath, albumID)
 	return err
 }
 

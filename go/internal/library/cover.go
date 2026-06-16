@@ -132,10 +132,22 @@ func ProcessAllAlbumCovers() error {
 		return err
 	}
 
+	var errs []string
+	maxErrs := 5
 	for _, a := range albums {
 		if err := ProcessAlbumCover(a); err != nil {
-			fmt.Printf("Warning: %v\n", err)
+			if len(errs) < maxErrs {
+				errs = append(errs, err.Error())
+			}
 		}
+	}
+
+	if len(errs) > 0 {
+		msg := strings.Join(errs, "; ")
+		if len(errs) >= maxErrs {
+			msg += "; ..."
+		}
+		return fmt.Errorf("covers: %s", msg)
 	}
 
 	return nil

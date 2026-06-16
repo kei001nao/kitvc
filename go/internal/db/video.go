@@ -68,17 +68,17 @@ func UpdateVideoFile(v VideoData) error {
 		)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (strftime('%s','now')))
 		ON CONFLICT(path) DO UPDATE SET
-			filename = excluded.filename,
-			size = excluded.size,
-			duration = excluded.duration,
-			year = excluded.year,
 			mtime = excluded.mtime,
-			type = excluded.type,
-			category = excluded.category,
-			series = excluded.series,
-			season = excluded.season,
-			episode = excluded.episode,
-			title = excluded.title
+			filename = CASE WHEN filename IS NULL OR filename = '' THEN excluded.filename ELSE filename END,
+			size = CASE WHEN size IS NULL THEN excluded.size ELSE size END,
+			duration = CASE WHEN duration IS NULL THEN excluded.duration ELSE duration END,
+			year = CASE WHEN year IS NULL THEN excluded.year ELSE year END,
+			type = CASE WHEN type IS NULL OR type = '' THEN excluded.type ELSE type END,
+			category = CASE WHEN category IS NULL OR category = '' THEN excluded.category ELSE category END,
+			series = CASE WHEN series IS NULL OR series = '' THEN excluded.series ELSE series END,
+			season = CASE WHEN season IS NULL THEN excluded.season ELSE season END,
+			episode = CASE WHEN episode IS NULL THEN excluded.episode ELSE episode END,
+			title = CASE WHEN title IS NULL OR title = '' THEN excluded.title ELSE title END
 	`, v.Path, v.Filename, v.Size, v.Duration, v.Year, v.MTime,
 		v.Type, v.Category, v.Series, v.Season, v.Episode, v.Title)
 
