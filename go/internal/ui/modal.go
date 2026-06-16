@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"log"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -182,6 +183,7 @@ func (m *modal) Update(msg tea.Msg) (*modal, modalUpdateResult, tea.Cmd) {
 }
 
 func (m *modal) View() string {
+	log.Printf("[DEBUGLOG] Modal.View kind=%d title=%q confirmMsg=%q", m.kind, m.title, m.confirmMsg)
 	dialogW := m.width
 	if dialogW < 40 {
 		dialogW = 40
@@ -229,11 +231,21 @@ func (m *modal) View() string {
 			lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(m.help),
 		)
 	case modalConfirm:
-		content = lipgloss.JoinVertical(lipgloss.Left,
-			m.confirmMsg,
+		dialogW = 40 // Force small width for confirm
+		innerW = dialogW - 4
+		content = lipgloss.JoinVertical(lipgloss.Center,
+			"",
+			lipgloss.NewStyle().Width(innerW).Align(lipgloss.Center).Render(m.confirmMsg),
 			"",
 			lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(m.help),
 		)
+		return lipgloss.NewStyle().
+			Width(dialogW).
+			Height(8).
+			Padding(1, 2).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62")).
+			Render(content)
 	case modalForm:
 		var lines []string
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Render(m.title))

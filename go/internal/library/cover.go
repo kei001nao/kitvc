@@ -9,6 +9,7 @@ import (
 	"github.com/dhowden/tag"
 	"kitvc/internal/config"
 	"kitvc/internal/db"
+	"kitvc/internal/musicbrainz"
 )
 
 func ExtractEmbeddedCover(trackPath string) ([]byte, string, error) {
@@ -88,6 +89,21 @@ func GetCachedCoverPath(albumID int64) string {
 		}
 	}
 	return ""
+}
+
+func FetchAndCacheMBICover(albumID int64, mbid string) error {
+	client := musicbrainz.NewClient()
+	data, ext, err := client.FetchCoverArt(mbid)
+	if err != nil {
+		return err
+	}
+
+	path, err := CacheCoverData(albumID, data, ext)
+	if err != nil {
+		return err
+	}
+
+	return db.UpdateAlbumCover(albumID, path)
 }
 
 func ProcessAlbumCover(album db.Album) error {
