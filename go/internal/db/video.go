@@ -393,6 +393,27 @@ func UpdateVideoField(path, field, value string) error {
 	return err
 }
 
+// UpdateVideoFieldIfEmpty updates a field only when the existing value is NULL or empty/zero.
+func UpdateVideoFieldIfEmpty(path, field, value string) error {
+	if !videoAllowedFields[field] {
+		return fmt.Errorf("field %q is not allowed for update", field)
+	}
+	switch field {
+	case "season", "episode", "year":
+		_, err := db.Exec(fmt.Sprintf(
+			"UPDATE video_files SET %s = ? WHERE path = ? AND (%s IS NULL OR %s = 0)",
+			field, field, field,
+		), value, path)
+		return err
+	default:
+		_, err := db.Exec(fmt.Sprintf(
+			"UPDATE video_files SET %s = ? WHERE path = ? AND (%s IS NULL OR %s = '')",
+			field, field, field,
+		), value, path)
+		return err
+	}
+}
+
 func GetContinueWatchingVideos() ([]VideoData, error) {
 	rows, err := db.Query(`
 		SELECT 

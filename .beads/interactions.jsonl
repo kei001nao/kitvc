@@ -120,3 +120,4 @@
 {"id":"int-68489ed6","kind":"field_change","created_at":"2026-06-15T22:42:40.93299999Z","actor":"Gemini CLI","issue_id":"kitvc-697","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-a661f930","kind":"field_change","created_at":"2026-06-16T03:33:02.961444785Z","actor":"Gemini CLI","issue_id":"kitvc-acv","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-d4dba02d","kind":"field_change","created_at":"2026-06-16T05:30:13.344382843Z","actor":"Gemini CLI","issue_id":"kitvc-of7","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
+{"id":"int-2842a57d","kind":"field_change","created_at":"2026-06-16T05:49:49.780952123Z","actor":"Gemini CLI","issue_id":"kitvc-7he","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}

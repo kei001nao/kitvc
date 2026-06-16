@@ -130,6 +130,11 @@ type model struct {
 	scanTotal         int
 	scanPhase         string
 	messageTime       time.Time
+	tmdbBatchMode     bool
+	tmdbBatchVideos   []db.VideoData
+	tmdbBatchIndex    int
+	tmdbBatchTotal    int
+	tmdbBatchCancelled bool
 }
 
 func InitialModel(cfg *config.Config) model {
@@ -314,6 +319,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case tmdbBatchProgressMsg:
+		m.tmdbBatchIndex = msg.current
+		m.tmdbBatchTotal = msg.total
+		m.setMessage(fmt.Sprintf("TMDB: %d/%d fetching...", msg.current, msg.total))
+		if m.tmdbBatchCancelled || m.tmdbBatchIndex >= m.tmdbBatchTotal {
+			cancelled := m.tmdbBatchCancelled
+			m.tmdbBatchMode = false
+			m.tmdbBatchCancelled = false
+			if cancelled {
+				m.setMessage("TMDB fetch cancelled")
+			} else {
+				m.setMessage(fmt.Sprintf("TMDB fetch complete: %d items", msg.total))
+			}
+			m.refreshVideoList()
+			if n := m.sidebar.SelectedNode(); n != nil {
+				if cmd := m.updateCoverForNode(n); cmd != nil {
+					return m, cmd
+				}
+			}
+			return m, nil
+		}
+		return m, m.processNextTMDbItem()
 	case errorMsg:
 		if m.videoFetch == nil {
 			m.setMessage(string(msg))
@@ -641,6 +668,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.scanning {
 				m.scanCancelled = true
 				m.message = "Cancelling scan..."
+				return m, nil
+			}
+			if m.tmdbBatchMode {
+				m.tmdbBatchCancelled = true
+				m.message = "Cancelling TMDB fetch..."
 				return m, nil
 			}
 		case "tab":
@@ -1187,6 +1219,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 					m.videoList.UpdatePlaybackStatus(currentPath, isPaused)
+				}
+			}
+			return m, nil
+		case "ctrl+b":
+			if m.tmdbBatchMode {
+				return m, nil
+			}
+			videoViews := map[viewState]bool{
+				viewVideoLibrary: true, viewVideoContinue: true,
+				viewVideoRecent: true, viewVideoHealth: true, viewVideoFilter: true,
+			}
+			if !m.focusedSide && videoViews[m.activeView] {
+				marked := m.videoList.MarkedVideos()
+				if len(marked) > 0 {
+					m.tmdbBatchMode = true
+					m.tmdbBatchCancelled = false
+					m.tmdbBatchVideos = marked
+					m.tmdbBatchIndex = 0
+					m.tmdbBatchTotal = len(marked)
+					m.setMessage("Fetching TMDB metadata...")
+					return m, m.processNextTMDbItem()
 				}
 			}
 			return m, nil
@@ -2522,7 +2575,10 @@ type scanReadyMsg struct {
 	videos []library.Video
 }
 
-
+type tmdbBatchProgressMsg struct {
+	current int
+	total   int
+}
 
 func (m model) scanMusicCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -2572,6 +2628,122 @@ func (m model) processNextScanItem() tea.Cmd {
 			})
 		}
 		return scanProgressMsg{current: m.scanIndex + 1, total: m.scanTotal}
+	}
+}
+
+func (m model) processNextTMDbItem() tea.Cmd {
+	return func() tea.Msg {
+		v := m.tmdbBatchVideos[m.tmdbBatchIndex]
+		apiKey := m.config.Video.TMDBAPIKey
+		if apiKey == "" {
+			apiKey = os.Getenv("TMDB_API_KEY")
+		}
+		if apiKey == "" {
+			return tmdbBatchProgressMsg{current: m.tmdbBatchIndex + 1, total: m.tmdbBatchTotal}
+		}
+		client := tmdb.NewClient(apiKey)
+
+		var meta *tmdb.VideoMetadata
+		if v.Type == "TV Show" && v.Series != "" {
+			items, err := client.SearchTV(v.Series)
+			if err == nil && len(items) > 0 {
+				meta, _ = client.FetchVideoMetadataByID(items[0].ID, true, v.Season, v.Episode)
+			}
+		} else {
+			query := v.Title
+			if query == "" {
+				query = v.Filename
+			}
+			if query != "" {
+				items, err := client.SearchMovie(query)
+				if err == nil {
+					// Prefer exact title match
+					for _, item := range items {
+						if item.Title == query {
+							meta, _ = client.FetchVideoMetadataByID(item.ID, false, 0, 0)
+							break
+						}
+					}
+					if meta == nil && len(items) > 0 {
+						meta, _ = client.FetchVideoMetadataByID(items[0].ID, false, 0, 0)
+					}
+				}
+			}
+		}
+
+		if meta != nil {
+			m.applyBatchTMDBMetadata(v.Path, meta)
+		}
+		return tmdbBatchProgressMsg{current: m.tmdbBatchIndex + 1, total: m.tmdbBatchTotal}
+	}
+}
+
+func (m *model) applyBatchTMDBMetadata(path string, meta *tmdb.VideoMetadata) {
+	if meta.Title != "" {
+		db.UpdateVideoFieldIfEmpty(path, "title", meta.Title)
+	}
+	if meta.Series != "" {
+		db.UpdateVideoFieldIfEmpty(path, "series", meta.Series)
+	}
+	if meta.Season > 0 {
+		db.UpdateVideoFieldIfEmpty(path, "season", fmt.Sprintf("%d", meta.Season))
+	}
+	if meta.Episode > 0 {
+		db.UpdateVideoFieldIfEmpty(path, "episode", fmt.Sprintf("%d", meta.Episode))
+	}
+	if meta.AirDate != "" {
+		db.UpdateVideoFieldIfEmpty(path, "air_date", meta.AirDate)
+	}
+	if len(meta.Genres) > 0 {
+		db.UpdateVideoFieldIfEmpty(path, "genres", strings.Join(meta.Genres, ", "))
+	}
+	if meta.Synopsis != "" {
+		db.UpdateVideoFieldIfEmpty(path, "synopsis", meta.Synopsis)
+	}
+	if meta.SeriesOverview != "" {
+		db.UpdateVideoFieldIfEmpty(path, "series_overview", meta.SeriesOverview)
+	}
+	if meta.EpisodeOverview != "" {
+		db.UpdateVideoFieldIfEmpty(path, "episode_overview", meta.EpisodeOverview)
+	}
+	if meta.Series != "" {
+		db.UpdateVideoFieldIfEmpty(path, "type", "TV Show")
+	} else {
+		db.UpdateVideoFieldIfEmpty(path, "type", "Movie")
+	}
+
+	// Download poster: episode still > season poster > series/movie poster
+	var posterURL string
+	var posterName string
+	if meta.StillPath != "" && meta.Episode > 0 {
+		posterURL = meta.StillPath
+		posterName = fmt.Sprintf("tmdb_%d_s%d_e%d", meta.ID, meta.Season, meta.Episode)
+	} else if meta.SeasonPosterPath != "" && meta.Season > 0 {
+		posterURL = meta.SeasonPosterPath
+		posterName = fmt.Sprintf("tmdb_%d_s%d", meta.ID, meta.Season)
+	} else if meta.PosterPath != "" {
+		posterURL = meta.PosterPath
+		posterName = fmt.Sprintf("tmdb_%d", meta.ID)
+	}
+	if posterURL != "" {
+		configDir, err := config.GetConfigDir()
+		if err == nil {
+			postersDir := filepath.Join(configDir, "posters")
+			if posterName == "" {
+				posterName = meta.Series
+				if posterName == "" {
+					posterName = meta.Title
+				}
+			}
+			if posterName != "" {
+				localPath, err := tmdb.DownloadPoster(posterURL, postersDir, posterName)
+				if err == nil {
+					fullPosterURL := "https://image.tmdb.org/t/p/w500" + posterURL
+					db.UpdateVideoFieldIfEmpty(path, "poster_path", fullPosterURL)
+					db.UpdateVideoFieldIfEmpty(path, "local_poster_path", localPath)
+				}
+			}
+		}
 	}
 }
 
