@@ -187,6 +187,15 @@ func UpdateTrackMTime(path string, mtime float64) error {
 	return err
 }
 
+func GetAlbumArtistTitle(albumID int64) (string, string, error) {
+	var artist, title string
+	err := db.QueryRow("SELECT artist, title FROM music_albums WHERE id = ?", albumID).Scan(&artist, &title)
+	if err != nil {
+		return "", "", err
+	}
+	return artist, title, nil
+}
+
 func UpdateAlbumMetadata(albumID int64, newArtist string, newAlbum string, newDate string) error {
 	tx, err := db.Begin()
 	if err != nil {

@@ -1006,7 +1006,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					m.pendingAction = actionEditAlbum
 					m.editAlbumID = album.ID
-					m.editFieldNames = []string{"artist", "album", "release_date"}
+					m.editFieldNames = []string{"artist", "album", "release_date", "genre"}
 
 					allTracks, err := db.GetMusicTracksByAlbumID(album.ID)
 					if err != nil {
@@ -1017,95 +1017,48 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.editPaths[i] = t.Path
 					}
 
+					initialGenre := ""
+					if len(allTracks) > 0 {
+						initialGenre = allTracks[0].Genre
+					}
+
 					m.modal = newFormModal("Edit Album",
-						[]string{"Artist", "Album", "Date"},
-						[]string{album.Artist, album.Title, album.ReleaseDate},
+						[]string{"Artist", "Album", "Date", "Genre"},
+						[]string{album.Artist, album.Title, album.ReleaseDate, initialGenre},
 						"Tab: Next  Enter: Save  Esc: Cancel")
 					if m.modal != nil {
 						m.modal.SetSize(m.width, m.height)
 					}
 				} else {
-					var selectedTracks []db.TrackData
+					var selectedTrack db.TrackData
+					var ok bool
 					if m.activeView == viewMusicLibrary {
-						marked := m.trackList.MarkedPaths()
-						if len(marked) > 0 {
-							for _, t := range m.trackList.tracks {
-								for _, p := range marked {
-									if t.Path == p {
-										selectedTracks = append(selectedTracks, t)
-										break
-									}
-								}
-							}
-						} else {
-							cursor := m.trackList.table.GetHighlightedRowIndex()
-							if cursor >= 0 && cursor < len(m.trackList.tracks) {
-								selectedTracks = []db.TrackData{m.trackList.tracks[cursor]}
-							}
+						cursor := m.trackList.table.GetHighlightedRowIndex()
+						if cursor >= 0 && cursor < len(m.trackList.tracks) {
+							selectedTrack = m.trackList.tracks[cursor]
+							ok = true
 						}
 					} else if m.activeView == viewMusicArtistDetail && !m.artistDetail.focusedUpper {
-						marked := m.artistDetail.MarkedTracks()
-						if len(marked) > 0 {
-							for _, t := range m.artistDetail.tracks {
-								for _, p := range marked {
-									if t.Path == p {
-										selectedTracks = append(selectedTracks, t)
-										break
-									}
-								}
-							}
-						} else {
-							track, ok := m.artistDetail.SelectedTrack()
-							if ok {
-								selectedTracks = []db.TrackData{track}
-							}
-						}
+						selectedTrack, ok = m.artistDetail.SelectedTrack()
 					} else if m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
 						cursor := m.trackList.table.GetHighlightedRowIndex()
 						if cursor >= 0 && cursor < len(m.trackList.tracks) {
-							selectedTracks = []db.TrackData{m.trackList.tracks[cursor]}
+							selectedTrack = m.trackList.tracks[cursor]
+							ok = true
 						}
 					}
 
-					if len(selectedTracks) == 0 {
+					if !ok {
 						return m, nil
 					}
 
-					m.editPaths = make([]string, len(selectedTracks))
-					for i, t := range selectedTracks {
-						m.editPaths[i] = t.Path
-					}
-
+					m.editPaths = []string{selectedTrack.Path}
 					m.editFieldNames = []string{"title", "genre"}
-					labels := []string{"Title", "Genre"}
-					initialValues := make([]string, 2)
-					for i, field := range m.editFieldNames {
-						var commonVal string
-						allSame := true
-						for j, t := range selectedTracks {
-							var val string
-							switch field {
-							case "title":
-								val = t.Title
-							case "genre":
-								val = t.Genre
-							}
-							if j == 0 {
-								commonVal = val
-							} else if val != commonVal {
-								allSame = false
-								break
-							}
-						}
-						if allSame {
-							initialValues[i] = commonVal
-						}
-					}
 
 					m.pendingAction = actionEditTrack
-					m.modal = newFormModal(
-						fmt.Sprintf("Edit Track (%d)", len(selectedTracks)),
-						labels, initialValues,
+					m.modal = newFormModal("Edit Track",
+						[]string{"Title", "Genre"},
+						[]string{selectedTrack.Title, selectedTrack.Genre},
 						"Tab: Next  Enter: Save  Esc: Cancel")
 					if m.modal != nil {
 						m.modal.SetSize(m.width, m.height)
@@ -1785,6 +1738,7 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		newArtist := strings.TrimSpace(result.values[0])
 		newAlbum := strings.TrimSpace(result.values[1])
 		newDate := strings.TrimSpace(result.values[2])
+		newGenre := strings.TrimSpace(result.values[3])
 
 		if newArtist == "" {
 			m.message = "Artist name cannot be empty"
@@ -1793,6 +1747,10 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 			m.editPaths = nil
 			return m
 		}
+
+		// Fetch original values to check if tree rebuild is needed
+		var origArtist, origAlbum string
+		origArtist, origAlbum, _ = db.GetAlbumArtistTitle(m.editAlbumID)
 
 		if err := db.UpdateAlbumMetadata(m.editAlbumID, newArtist, newAlbum, newDate); err != nil {
 			m.message = fmt.Sprintf("Failed to update album: %v", err)
@@ -1809,6 +1767,10 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 				"album":  newAlbum,
 				"date":   newDate,
 			}
+			if newGenre != "" {
+				tags["genre"] = newGenre
+				db.UpdateTrackField(path, "genre", newGenre)
+			}
 			if err := library.WriteAudioTags(path, tags); err != nil {
 				log.Printf("Failed to write tags to %s: %v", path, err)
 			}
@@ -1817,34 +1779,38 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 
 		m.message = fmt.Sprintf("Updated album: %s - %s", newArtist, newAlbum)
 
-		// Save expanded state of category nodes and selected node ID
-		expandedMap := make(map[string]bool)
-		for _, n := range m.sidebar.nodes {
-			expandedMap[n.id] = n.expanded
-		}
-		savedID := ""
-		if n := m.sidebar.SelectedNode(); n != nil {
-			savedID = n.id
-		}
+		needsTreeRebuild := newArtist != origArtist || newAlbum != origAlbum
 
-		m.sidebar.Refresh()
-
-		// Restore expanded states
-		for _, n := range m.sidebar.nodes {
-			if exp, ok := expandedMap[n.id]; ok {
-				n.expanded = exp
+		if needsTreeRebuild {
+			// Save expanded state of category nodes and selected node ID
+			expandedMap := make(map[string]bool)
+			for _, n := range m.sidebar.nodes {
+				expandedMap[n.id] = n.expanded
 			}
-		}
-		m.sidebar.rebuildVisible()
+			savedID := ""
+			if n := m.sidebar.SelectedNode(); n != nil {
+				savedID = n.id
+			}
 
-		// Restore cursor: try exact ID match
-		if savedID != "" {
-			found := m.sidebar.SelectByID(savedID)
-			if !found && strings.HasPrefix(savedID, "artist:") {
-				m.sidebar.SelectByID("artist:" + newArtist)
-			} else if !found {
-				albumIDStr := fmt.Sprintf("album:%d", m.editAlbumID)
-				m.sidebar.SelectByID(albumIDStr)
+			m.sidebar.Refresh()
+
+			// Restore expanded states
+			for _, n := range m.sidebar.nodes {
+				if exp, ok := expandedMap[n.id]; ok {
+					n.expanded = exp
+				}
+			}
+			m.sidebar.rebuildVisible()
+
+			// Restore cursor: try exact ID match
+			if savedID != "" {
+				found := m.sidebar.SelectByID(savedID)
+				if !found && strings.HasPrefix(savedID, "artist:") {
+					m.sidebar.SelectByID("artist:" + newArtist)
+				} else if !found {
+					albumIDStr := fmt.Sprintf("album:%d", m.editAlbumID)
+					m.sidebar.SelectByID(albumIDStr)
+				}
 			}
 		}
 
