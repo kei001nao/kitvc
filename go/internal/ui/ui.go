@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"kitvc/internal/config"
 	"kitvc/internal/db"
@@ -88,6 +89,8 @@ const (
 	actionDeleteVideoFilter
 	actionEditVideo
 	actionBatchEditVideo
+	actionExportPlaylist
+	actionExportVideoPlaylist
 )
 
 type model struct {
@@ -142,6 +145,18 @@ type model struct {
 	scanVideos        []library.Video
 	scanIndex         int
 	scanTotal         int
+
+	// Incremental search
+	searchMode       bool
+	searchQuery      string
+	searchOrigTracks []db.TrackData
+	searchOrigVideos []db.VideoData
+
+	// Help overlay
+	helpOverlay string
+
+	// Global search: saved view to restore on exit
+	savedView viewState
 	scanPhase         string
 	messageTime       time.Time
 	tmdbBatchMode     bool
@@ -700,6 +715,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setMessage(string(msg))
 		return m, nil
 	case tea.KeyMsg:
+		// Help overlay dismiss
+		if m.helpOverlay != "" {
+			m.helpOverlay = ""
+			m.setMessage("")
+			return m, nil
+		}
+		// Search mode handling
+		if m.searchMode {
+			key := msg.Key()
+			switch key.String() {
+			case "esc":
+				m.exitSearch()
+				return m, nil
+			case "enter":
+				// keep search filter active, fall through to normal handling (playback / focus switch)
+			case "backspace":
+				if len(m.searchQuery) > 0 {
+					_, size := utf8.DecodeLastRuneInString(m.searchQuery)
+					m.searchQuery = m.searchQuery[:len(m.searchQuery)-size]
+					m.applySearchFilter()
+				}
+				return m, nil
+			case "tab":
+				// Tab is disabled in search mode to prevent sidebar focus + display corruption
+				return m, nil
+			case "space":
+				// Block space sidebar navigation during search mode
+				if m.focusedSide {
+					return m, nil
+				}
+				// fall through to normal handling (play/pause toggle)
+			default:
+				if key.Text != "" {
+					m.searchQuery += key.Text
+					m.applySearchFilter()
+					return m, nil
+				}
+				// Block all sidebar navigation during search mode
+				if m.focusedSide {
+					return m, nil
+				}
+				// Fall through: up/down navigate filtered list, space toggles playback, etc.
+			}
+		}
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if m.player != nil {
@@ -768,6 +827,68 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.config.Player.Volume = int(m.volume)
 				config.SaveConfig(m.config)
 			}
+			return m, nil
+		case "/":
+			if !m.searchMode {
+				m.enterSearch()
+			}
+			return m, nil
+		case "E":
+			// extract playlist ID from sidebar selection first, then fall back to currentPlaylistID
+			playlistID := int64(0)
+			isMusic := false
+			sel := m.sidebar.SelectedNode()
+			if sel != nil && sel.id != "" {
+				if strings.HasPrefix(sel.id, "music_playlist:") {
+					idStr := strings.TrimPrefix(sel.id, "music_playlist:")
+					if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+						playlistID = id
+						isMusic = true
+					}
+				} else if strings.HasPrefix(sel.id, "video_playlist:") {
+					idStr := strings.TrimPrefix(sel.id, "video_playlist:")
+					if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+						playlistID = id
+						isMusic = false
+					}
+				}
+			}
+			if playlistID == 0 && m.currentPlaylistID > 0 {
+				playlistID = m.currentPlaylistID
+				isMusic = m.activeView == viewMusicLibrary
+			}
+			if playlistID > 0 {
+				if isMusic {
+					playlists, _ := db.GetMusicPlaylists()
+					defName := "playlist.m3u"
+					for _, p := range playlists {
+						if p.ID == playlistID {
+							defName = p.Name + ".m3u"
+							break
+						}
+					}
+					m.currentPlaylistID = playlistID
+					m.pendingAction = actionExportPlaylist
+					m.modal = newTextInputModal("Export M3U", defName, "Enter: Export  Esc: Cancel")
+					m.modal.SetSize(m.width, m.height)
+				} else {
+					playlists, _ := db.GetVideoPlaylists()
+					defName := "playlist.m3u"
+					for _, p := range playlists {
+						if p.ID == playlistID {
+							defName = p.Name + ".m3u"
+							break
+						}
+					}
+					m.currentPlaylistID = playlistID
+					m.pendingAction = actionExportVideoPlaylist
+					m.modal = newTextInputModal("Export Video M3U", defName, "Enter: Export  Esc: Cancel")
+					m.modal.SetSize(m.width, m.height)
+				}
+			}
+			return m, nil
+		case "f1":
+			m.helpOverlay = m.helpOverlayView(m.width)
 			return m, nil
 		case "s":
 			if m.scanning {
@@ -2148,6 +2269,16 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		m.videoList.ClearMarks()
 		m.modal = nil
 
+	case actionExportPlaylist:
+		m.exportCurrentPlaylist(result.text)
+		m.pendingTracks = nil
+		m.modal = nil
+
+	case actionExportVideoPlaylist:
+		m.exportCurrentVideoPlaylist(result.text)
+		m.pendingVideoFiles = nil
+		m.modal = nil
+
 	case actionRemoveVideoFile:
 		for _, path := range m.pendingVideoFiles {
 			db.RemoveFileFromVideoPlaylist(m.currentPlaylistID, path)
@@ -2592,6 +2723,226 @@ func (m *model) refreshVideoHealth() {
 	videos, _ := db.GetUnhealthyVideos()
 	m.videoList = newVideoListFromVideos(m.width-sbWidth-3, m.height-6, videos)
 	m.syncFocus()
+}
+
+// Incremental search
+func (m *model) enterSearch() {
+	m.searchMode = true
+	m.searchQuery = ""
+	m.savedView = -1
+	switch m.activeView {
+	case viewMusicArtists, viewMusicArtistDetail:
+		tracks, err := db.GetMusicTracks("", "")
+		if err == nil && len(tracks) > 0 {
+			m.searchOrigTracks = make([]db.TrackData, len(tracks))
+			copy(m.searchOrigTracks, tracks)
+			m.savedView = m.activeView
+			m.activeView = viewMusicLibrary
+			sbWidth := m.getSidebarWidth()
+			mainWidth := m.width - sbWidth - 2
+			if mainWidth < 1 {
+				mainWidth = 1
+			}
+			middleHeight := m.height - 6
+			if middleHeight < 1 {
+				middleHeight = 1
+			}
+			m.trackList = newTrackListFromTracks(mainWidth, middleHeight, m.searchOrigTracks)
+			m.syncFocus()
+		}
+	case viewMusicLibrary, viewMusicRecent, viewMusicFilter:
+		m.searchOrigTracks = make([]db.TrackData, len(m.trackList.tracks))
+		copy(m.searchOrigTracks, m.trackList.tracks)
+	case viewVideoLibrary, viewVideoContinue, viewVideoRecent, viewVideoFilter, viewVideoHealth:
+		m.searchOrigVideos = make([]db.VideoData, len(m.videoList.videos))
+		copy(m.searchOrigVideos, m.videoList.videos)
+	}
+}
+
+func (m *model) exitSearch() {
+	m.searchMode = false
+	m.searchQuery = ""
+	if m.savedView >= 0 {
+		m.activeView = m.savedView
+		m.savedView = -1
+		m.searchOrigTracks = nil
+		m.searchOrigVideos = nil
+		m.syncFocus()
+		return
+	}
+	sbWidth := m.getSidebarWidth()
+	mainWidth := m.width - sbWidth - 2
+	if mainWidth < 1 {
+		mainWidth = 1
+	}
+	middleHeight := m.height - 6
+	if middleHeight < 1 {
+		middleHeight = 1
+	}
+	if len(m.searchOrigTracks) > 0 {
+		m.trackList = newTrackListFromTracks(mainWidth, middleHeight, m.searchOrigTracks)
+		m.searchOrigTracks = nil
+	}
+	if len(m.searchOrigVideos) > 0 {
+		m.videoList = newVideoListFromVideos(mainWidth, middleHeight, m.searchOrigVideos)
+		m.searchOrigVideos = nil
+	}
+}
+
+func (m *model) applySearchFilter() {
+	q := strings.ToLower(m.searchQuery)
+	if q == "" {
+		if m.savedView >= 0 {
+			m.activeView = m.savedView
+			m.syncFocus()
+		} else {
+			sbWidth := m.getSidebarWidth()
+			mainWidth := m.width - sbWidth - 2
+			if mainWidth < 1 {
+				mainWidth = 1
+			}
+			middleHeight := m.height - 6
+			if middleHeight < 1 {
+				middleHeight = 1
+			}
+			if len(m.searchOrigTracks) > 0 {
+				m.trackList = newTrackListFromTracks(mainWidth, middleHeight, m.searchOrigTracks)
+			}
+			if len(m.searchOrigVideos) > 0 {
+				m.videoList = newVideoListFromVideos(mainWidth, middleHeight, m.searchOrigVideos)
+			}
+		}
+		return
+	}
+	sbWidth := m.getSidebarWidth()
+	mainWidth := m.width - sbWidth - 2
+	if mainWidth < 1 {
+		mainWidth = 1
+	}
+	middleHeight := m.height - 6
+	if middleHeight < 1 {
+		middleHeight = 1
+	}
+	if len(m.searchOrigTracks) > 0 {
+		if m.savedView >= 0 && m.activeView != viewMusicLibrary {
+			m.activeView = viewMusicLibrary
+			m.syncFocus()
+		}
+		var filtered []db.TrackData
+		for _, t := range m.searchOrigTracks {
+			if strings.Contains(strings.ToLower(t.Title), q) ||
+				strings.Contains(strings.ToLower(t.Artist), q) ||
+				strings.Contains(strings.ToLower(t.Album), q) {
+				filtered = append(filtered, t)
+			}
+		}
+		m.trackList = newTrackListFromTracks(mainWidth, middleHeight, filtered)
+	}
+	if len(m.searchOrigVideos) > 0 {
+		var filtered []db.VideoData
+		for _, v := range m.searchOrigVideos {
+			if strings.Contains(strings.ToLower(v.Title), q) ||
+				strings.Contains(strings.ToLower(v.Series), q) ||
+				strings.Contains(strings.ToLower(v.Filename), q) ||
+				strings.Contains(strings.ToLower(v.Category), q) {
+				filtered = append(filtered, v)
+			}
+		}
+		m.videoList = newVideoListFromVideos(mainWidth, middleHeight, filtered)
+	}
+}
+
+// M3U Export
+func (m *model) exportCurrentPlaylist(filename string) {
+	if m.currentPlaylistID <= 0 {
+		return
+	}
+	tracks, _ := db.GetMusicPlaylistTracks(m.currentPlaylistID)
+	dir := m.config.Playlist.MusicPlaylistDir
+	if dir == "" {
+		configDir, err := config.GetConfigDir()
+		if err == nil {
+			dir = filepath.Join(configDir, "playlists")
+		}
+	}
+	if dir == "" {
+		return
+	}
+	os.MkdirAll(dir, 0755)
+	path := filepath.Join(dir, filename)
+	f, err := os.Create(path)
+	if err != nil {
+		m.setMessage(fmt.Sprintf("Export failed: %v", err))
+		return
+	}
+	defer f.Close()
+	fmt.Fprintln(f, "#EXTM3U")
+	for _, t := range tracks {
+		fmt.Fprintf(f, "#EXTINF:%d,%s - %s\n", t.Duration, t.Artist, t.Title)
+		fmt.Fprintln(f, t.Path)
+	}
+	m.setMessage(fmt.Sprintf("Exported %d tracks to %s", len(tracks), path))
+}
+
+func (m *model) exportCurrentVideoPlaylist(filename string) {
+	if m.currentPlaylistID <= 0 {
+		return
+	}
+	files, _ := db.GetVideoPlaylistFiles(m.currentPlaylistID)
+	dir := m.config.Playlist.VideoPlaylistDir
+	if dir == "" {
+		configDir, err := config.GetConfigDir()
+		if err == nil {
+			dir = filepath.Join(configDir, "playlists")
+		}
+	}
+	if dir == "" {
+		return
+	}
+	os.MkdirAll(dir, 0755)
+	path := filepath.Join(dir, filename)
+	f, err := os.Create(path)
+	if err != nil {
+		m.setMessage(fmt.Sprintf("Export failed: %v", err))
+		return
+	}
+	defer f.Close()
+	fmt.Fprintln(f, "#EXTM3U")
+	for _, v := range files {
+		fmt.Fprintf(f, "#EXTINF:%d,%s\n", v.Duration, v.Title)
+		fmt.Fprintln(f, v.Path)
+	}
+	m.setMessage(fmt.Sprintf("Exported %d videos to %s", len(files), path))
+}
+
+// Keyboard help
+func (m *model) helpOverlayView(width int) string {
+	helpText := `  Key         Action
+  ─────────────────────────────────────
+  q / Ctrl+C  Quit
+  Tab         Toggle sidebar/content focus
+  ↑/↓         Navigate list/tree
+  →/←         Expand/collapse tree node
+  ←/→         Seek -5/+5 sec (content focused)
+  H/L         Seek -10/+10 sec
+  Enter       Play selected
+  Space       Pause/Resume
+  /           Search current list
+  s           Scan library
+  n           Create filter (sidebar, Views node)
+  d           Delete item (playlist/track/filter)
+  a           Add tracks to playlist
+  e           Edit metadata (multi-select: batch edit)
+  E           Export playlist to M3U
+  Ctrl+t      MusicBrainz search
+  Ctrl+s      TMDB search / M3U import
+  F1          Show this help`
+	return lipgloss.NewStyle().
+		Width(width - 4).
+		Height(22).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("5")).
+		Render(helpText)
 }
 
 func (m *model) refreshCurrentVideoView() {
@@ -3228,7 +3579,12 @@ func (m model) View() tea.View {
 		return v
 	}
 
-	header := m.renderHeader()
+	var header string
+	if m.searchMode {
+		header = m.renderSearchBar()
+	} else {
+		header = m.renderHeader()
+	}
 	sbView := m.sidebar.View(m.focusedSide)
 	sbWidth := m.getSidebarWidth()
 
@@ -3289,7 +3645,9 @@ func (m model) View() tea.View {
 
 	// If any modal is active, overlay it
 	var overlay string
-	if m.musicFetch != nil {
+	if m.helpOverlay != "" {
+		overlay = m.helpOverlay
+	} else if m.musicFetch != nil {
 		mw := 100
 		mh := 25
 		if mw > m.width-4 { mw = m.width - 4 }
@@ -3386,6 +3744,32 @@ func (m model) isAnyInputFocused() bool {
 		return true
 	}
 	return false
+}
+
+func (m model) renderSearchBar() string {
+	var count, origCount int
+	if len(m.searchOrigTracks) > 0 {
+		origCount = len(m.searchOrigTracks)
+		count = len(m.trackList.tracks)
+	} else if len(m.searchOrigVideos) > 0 {
+		origCount = len(m.searchOrigVideos)
+		count = len(m.videoList.videos)
+	}
+	searchStr := fmt.Sprintf(" SEARCH: /%s_", m.searchQuery)
+	infoStr := fmt.Sprintf(" %d/%d ", count, origCount)
+	avail := m.width - 5 - lipgloss.Width(searchStr) - lipgloss.Width(infoStr) - 6
+	if avail > 0 {
+		searchStr += strings.Repeat(" ", avail) + infoStr
+	} else {
+		searchStr += infoStr
+	}
+	return lipgloss.NewStyle().
+		Width(m.width - 5).
+		Height(3).
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(lipgloss.Color("5")).
+		Padding(0, 2).
+		Render(searchStr)
 }
 
 func (m model) renderHeader() string {
