@@ -74,6 +74,10 @@ const (
 	actionAddToPlaylist
 	actionDeletePlaylist
 	actionRemoveTrack
+	actionCreateVideoPlaylist
+	actionAddToVideoPlaylist
+	actionDeleteVideoPlaylist
+	actionRemoveVideoFile
 	actionEditTrack
 	actionEditAlbum
 	actionCreateMusicFilter
@@ -108,6 +112,7 @@ type model struct {
 	modal             *modal
 	pendingAction     pendingAction
 	pendingTracks     []string
+	pendingVideoFiles []string
 	editFieldNames    []string
 	editPaths         []string
 	editAlbumID       int64
@@ -899,13 +904,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.modal.SetSize(m.width, m.height)
 						}
 					} else {
-					selected := m.trackList.table.HighlightedRow()
-					if selected.Data != nil {
-						tracks, _ := db.GetMusicPlaylistTracks(m.currentPlaylistID)
-						for _, t := range tracks {
-							selTitle, _ := selected.Data[trackColTitle].(string)
-							selArtist, _ := selected.Data[trackColArtist].(string)
-							if t.Title == selTitle && t.Artist == selArtist {
+						selected := m.trackList.table.HighlightedRow()
+						if selected.Data != nil {
+							tracks, _ := db.GetMusicPlaylistTracks(m.currentPlaylistID)
+							for _, t := range tracks {
+								selTitle, _ := selected.Data[trackColTitle].(string)
+								selArtist, _ := selected.Data[trackColArtist].(string)
+								if t.Title == selTitle && t.Artist == selArtist {
 									m.pendingAction = actionRemoveTrack
 									m.pendingTracks = []string{t.Path}
 									m.modal = newConfirmModal("Remove this track from the playlist?")
@@ -917,6 +922,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							}
 						}
 					}
+				} else if m.activeView == viewVideoLibrary {
+					markedPaths := m.videoList.MarkedPaths()
+					if len(markedPaths) > 0 {
+						m.pendingAction = actionRemoveVideoFile
+						m.pendingVideoFiles = markedPaths
+						m.modal = newConfirmModal(fmt.Sprintf("Remove %d marked videos from the playlist?", len(markedPaths)))
+						if m.modal != nil {
+							m.modal.SetSize(m.width, m.height)
+						}
+					} else {
+						selected := m.videoList.table.HighlightedRow()
+						if selected.Data != nil {
+							cursor := m.videoList.table.GetHighlightedRowIndex()
+							if cursor >= 0 && cursor < len(m.videoList.videos) {
+								v := m.videoList.videos[cursor]
+								m.pendingAction = actionRemoveVideoFile
+								m.pendingVideoFiles = []string{v.Path}
+								m.modal = newConfirmModal("Remove '" + v.Filename + "' from the playlist?")
+								if m.modal != nil {
+									m.modal.SetSize(m.width, m.height)
+								}
+							}
+						}
+					}
 				}
 				return m, nil
 			} else if !m.focusedSide && m.activeView == viewMusicFilter && m.currentFilterID > 0 {
@@ -924,58 +953,86 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", m.currentFilterName))
 				m.modal.SetSize(m.width, m.height)
 				return m, nil
-		} else if !m.focusedSide && m.activeView == viewVideoFilter && m.currentVideoFilterID > 0 {
+			} else if !m.focusedSide && m.activeView == viewVideoFilter && m.currentVideoFilterID > 0 {
 				m.pendingAction = actionDeleteVideoFilter
 				m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", m.currentVideoFilterName))
 				m.modal.SetSize(m.width, m.height)
 				return m, nil
-		} else if m.focusedSide {
-			sel := m.sidebar.SelectedNode()
-			if sel != nil && strings.HasPrefix(sel.id, "music_playlist:") {
-				m.pendingAction = actionDeletePlaylist
-				m.modal = newConfirmModal("Delete playlist '" + sel.label + "'?")
-				m.modal.SetSize(m.width, m.height)
-			} else if sel != nil && strings.HasPrefix(sel.id, "music_filter:") {
-				idStr := strings.TrimPrefix(sel.id, "music_filter:")
-				id, _ := strconv.ParseInt(idStr, 10, 64)
-				m.currentFilterID = id
-				m.currentFilterName = sel.label
-				m.pendingAction = actionDeleteMusicFilter
-				m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", sel.label))
-				m.modal.SetSize(m.width, m.height)
-			} else if sel != nil && strings.HasPrefix(sel.id, "video_filter:") {
-				idStr := strings.TrimPrefix(sel.id, "video_filter:")
-				id, _ := strconv.ParseInt(idStr, 10, 64)
-				m.currentVideoFilterID = id
-				m.currentVideoFilterName = sel.label
-				m.pendingAction = actionDeleteVideoFilter
-				m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", sel.label))
-				m.modal.SetSize(m.width, m.height)
-			}
-			return m, nil
+			} else if m.focusedSide {
+				sel := m.sidebar.SelectedNode()
+				if sel != nil && strings.HasPrefix(sel.id, "music_playlist:") {
+					m.pendingAction = actionDeletePlaylist
+					m.modal = newConfirmModal("Delete playlist '" + sel.label + "'?")
+					m.modal.SetSize(m.width, m.height)
+				} else if sel != nil && strings.HasPrefix(sel.id, "video_playlist:") {
+					m.pendingAction = actionDeleteVideoPlaylist
+					m.modal = newConfirmModal("Delete video playlist '" + sel.label + "'?")
+					m.modal.SetSize(m.width, m.height)
+				} else if sel != nil && strings.HasPrefix(sel.id, "music_filter:") {
+					idStr := strings.TrimPrefix(sel.id, "music_filter:")
+					id, _ := strconv.ParseInt(idStr, 10, 64)
+					m.currentFilterID = id
+					m.currentFilterName = sel.label
+					m.pendingAction = actionDeleteMusicFilter
+					m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", sel.label))
+					m.modal.SetSize(m.width, m.height)
+				} else if sel != nil && strings.HasPrefix(sel.id, "video_filter:") {
+					idStr := strings.TrimPrefix(sel.id, "video_filter:")
+					id, _ := strconv.ParseInt(idStr, 10, 64)
+					m.currentVideoFilterID = id
+					m.currentVideoFilterName = sel.label
+					m.pendingAction = actionDeleteVideoFilter
+					m.modal = newConfirmModal(fmt.Sprintf("Delete view '%s'?", sel.label))
+					m.modal.SetSize(m.width, m.height)
+				}
+				return m, nil
 			}
 		case "shift+up":
-			if !m.focusedSide && m.currentPlaylistID > 0 && m.activeView == viewMusicLibrary {
-				tracks, _ := db.GetMusicPlaylistTracks(m.currentPlaylistID)
-				if len(tracks) > 0 {
-					cursor := m.trackList.table.GetHighlightedRowIndex()
-					if cursor > 0 {
-						db.MoveMusicPlaylistTrack(m.currentPlaylistID, cursor, cursor-1)
-						m.refreshPlaylistTracks(m.currentPlaylistID)
-						m.trackList.table = m.trackList.table.WithHighlightedRow(cursor - 1)
+			if !m.focusedSide && m.currentPlaylistID > 0 {
+				if m.activeView == viewMusicLibrary {
+					tracks, _ := db.GetMusicPlaylistTracks(m.currentPlaylistID)
+					if len(tracks) > 0 {
+						cursor := m.trackList.table.GetHighlightedRowIndex()
+						if cursor > 0 {
+							db.MoveMusicPlaylistTrack(m.currentPlaylistID, cursor, cursor-1)
+							m.refreshPlaylistTracks(m.currentPlaylistID)
+							m.trackList.table = m.trackList.table.WithHighlightedRow(cursor - 1)
+						}
+					}
+				} else if m.activeView == viewVideoLibrary {
+					videos, _ := db.GetVideoPlaylistFiles(m.currentPlaylistID)
+					if len(videos) > 0 {
+						cursor := m.videoList.table.GetHighlightedRowIndex()
+						if cursor > 0 {
+							db.MoveVideoPlaylistFile(m.currentPlaylistID, cursor, cursor-1)
+							m.refreshVideoPlaylistFiles(m.currentPlaylistID)
+							m.videoList.table = m.videoList.table.WithHighlightedRow(cursor - 1)
+						}
 					}
 				}
 				return m, nil
 			}
 		case "shift+down":
-			if !m.focusedSide && m.currentPlaylistID > 0 && m.activeView == viewMusicLibrary {
-				tracks, _ := db.GetMusicPlaylistTracks(m.currentPlaylistID)
-				if len(tracks) > 0 {
-					cursor := m.trackList.table.GetHighlightedRowIndex()
-					if cursor < len(tracks)-1 {
-						db.MoveMusicPlaylistTrack(m.currentPlaylistID, cursor, cursor+1)
-						m.refreshPlaylistTracks(m.currentPlaylistID)
-						m.trackList.table = m.trackList.table.WithHighlightedRow(cursor + 1)
+			if !m.focusedSide && m.currentPlaylistID > 0 {
+				if m.activeView == viewMusicLibrary {
+					tracks, _ := db.GetMusicPlaylistTracks(m.currentPlaylistID)
+					if len(tracks) > 0 {
+						cursor := m.trackList.table.GetHighlightedRowIndex()
+						if cursor < len(tracks)-1 {
+							db.MoveMusicPlaylistTrack(m.currentPlaylistID, cursor, cursor+1)
+							m.refreshPlaylistTracks(m.currentPlaylistID)
+							m.trackList.table = m.trackList.table.WithHighlightedRow(cursor + 1)
+						}
+					}
+				} else if m.activeView == viewVideoLibrary {
+					videos, _ := db.GetVideoPlaylistFiles(m.currentPlaylistID)
+					if len(videos) > 0 {
+						cursor := m.videoList.table.GetHighlightedRowIndex()
+						if cursor < len(videos)-1 {
+							db.MoveVideoPlaylistFile(m.currentPlaylistID, cursor, cursor+1)
+							m.refreshVideoPlaylistFiles(m.currentPlaylistID)
+							m.videoList.table = m.videoList.table.WithHighlightedRow(cursor + 1)
+						}
 					}
 				}
 				return m, nil
@@ -984,54 +1041,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.focusedSide && m.currentPlaylistID > 0 {
 				sel := m.sidebar.SelectedNode()
 				if sel != nil {
-					m.pendingAction = actionDeletePlaylist
-					m.modal = newConfirmModal("Delete playlist '" + sel.label + "'?")
-					m.modal.SetSize(m.width, m.height)
+					if strings.HasPrefix(sel.id, "music_playlist:") {
+						m.pendingAction = actionDeletePlaylist
+						m.modal = newConfirmModal("Delete playlist '" + sel.label + "'?")
+						m.modal.SetSize(m.width, m.height)
+					} else if strings.HasPrefix(sel.id, "video_playlist:") {
+						m.pendingAction = actionDeleteVideoPlaylist
+						m.modal = newConfirmModal("Delete video playlist '" + sel.label + "'?")
+						m.modal.SetSize(m.width, m.height)
+					}
 				}
 				return m, nil
 			}
 		case "a":
 			if !m.focusedSide {
 				var hasSelection bool
-				var tracksToAdd []string
-				if m.activeView == viewMusicLibrary {
-					// use marked tracks when present
+				var pathsToAdd []string
+				var isVideo bool
+
+				if m.activeView == viewMusicLibrary || m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
 					markedPaths := m.trackList.MarkedPaths()
 					if len(markedPaths) > 0 {
-						tracksToAdd = markedPaths
+						pathsToAdd = markedPaths
 						hasSelection = true
 					} else {
 						selected := m.trackList.table.HighlightedRow()
 						if selected.Data != nil {
-							artist, album := m.getCurrentFilter()
-							tracks, _ := db.GetMusicTracks(artist, album)
-							for _, t := range tracks {
-								selTitle, _ := selected.Data[trackColTitle].(string)
-								selArtist, _ := selected.Data[trackColArtist].(string)
-								if t.Title == selTitle && t.Artist == selArtist {
-									tracksToAdd = []string{t.Path}
-									hasSelection = true
-									break
-								}
-							}
-						}
-					}
-				} else if m.activeView == viewMusicRecent || m.activeView == viewMusicFilter {
-					markedPaths := m.trackList.MarkedPaths()
-					if len(markedPaths) > 0 {
-						tracksToAdd = markedPaths
-						hasSelection = true
-					} else {
-						selected := m.trackList.table.HighlightedRow()
-						if selected.Data != nil {
-							for _, t := range m.trackList.tracks {
-								selTitle, _ := selected.Data[trackColTitle].(string)
-								selArtist, _ := selected.Data[trackColArtist].(string)
-								if t.Title == selTitle && t.Artist == selArtist {
-									tracksToAdd = []string{t.Path}
-									hasSelection = true
-									break
-								}
+							cursor := m.trackList.table.GetHighlightedRowIndex()
+							if cursor >= 0 && cursor < len(m.trackList.tracks) {
+								pathsToAdd = []string{m.trackList.tracks[cursor].Path}
+								hasSelection = true
 							}
 						}
 					}
@@ -1040,37 +1079,66 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						albumTitle, ok := m.artistDetail.SelectedAlbum()
 						if ok {
 							tracks, _ := db.GetMusicTracks(m.artistDetail.artist, albumTitle)
-							tracksToAdd = make([]string, len(tracks))
+							pathsToAdd = make([]string, len(tracks))
 							for i, t := range tracks {
-								tracksToAdd[i] = t.Path
+								pathsToAdd[i] = t.Path
 							}
 							hasSelection = true
 						}
 					} else {
-						// use marked tracks when present
 						markedPaths := m.artistDetail.MarkedTracks()
 						if len(markedPaths) > 0 {
-							tracksToAdd = markedPaths
+							pathsToAdd = markedPaths
 							hasSelection = true
 						} else {
 							track, ok := m.artistDetail.SelectedTrack()
 							if ok {
-								tracksToAdd = []string{track.Path}
+								pathsToAdd = []string{track.Path}
 								hasSelection = true
 							}
 						}
 					}
+				} else if m.activeView == viewVideoLibrary || m.activeView == viewVideoRecent || m.activeView == viewVideoFilter || m.activeView == viewVideoContinue || m.activeView == viewVideoHealth {
+					markedPaths := m.videoList.MarkedPaths()
+					if len(markedPaths) > 0 {
+						pathsToAdd = markedPaths
+						hasSelection = true
+						isVideo = true
+					} else {
+						selected := m.videoList.table.HighlightedRow()
+						if selected.Data != nil {
+							cursor := m.videoList.table.GetHighlightedRowIndex()
+							if cursor >= 0 && cursor < len(m.videoList.videos) {
+								pathsToAdd = []string{m.videoList.videos[cursor].Path}
+								hasSelection = true
+								isVideo = true
+							}
+						}
+					}
 				}
+
 				if hasSelection {
-					m.pendingAction = actionAddToPlaylist
-					m.pendingTracks = tracksToAdd
-					playlists, _ := db.GetMusicPlaylists()
-					items := make([]string, 0, len(playlists)+1)
-					items = append(items, "[New Playlist...]")
-				for _, p := range playlists {
-					items = append(items, p.Name)
-				}
-					m.modal = newListSelectModal("Add to Playlist", items, "↑↓: Select  Enter: Confirm  Esc: Cancel")
+					if isVideo {
+						m.pendingAction = actionAddToVideoPlaylist
+						m.pendingVideoFiles = pathsToAdd
+						playlists, _ := db.GetVideoPlaylists()
+						items := make([]string, 0, len(playlists)+1)
+						items = append(items, "[New Playlist...]")
+						for _, p := range playlists {
+							items = append(items, p.Name)
+						}
+						m.modal = newListSelectModal("Add to Video Playlist", items, "↑↓: Select  Enter: Confirm  Esc: Cancel")
+					} else {
+						m.pendingAction = actionAddToPlaylist
+						m.pendingTracks = pathsToAdd
+						playlists, _ := db.GetMusicPlaylists()
+						items := make([]string, 0, len(playlists)+1)
+						items = append(items, "[New Playlist...]")
+						for _, p := range playlists {
+							items = append(items, p.Name)
+						}
+						m.modal = newListSelectModal("Add to Playlist", items, "↑↓: Select  Enter: Confirm  Esc: Cancel")
+					}
 					m.modal.SetSize(m.width, m.height)
 				}
 				return m, nil
@@ -1693,6 +1761,13 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 		m.activeView = viewMusicLibrary
 		m.trackList.ClearMarks()
 		m.refreshPlaylistTracks(id)
+	case strings.HasPrefix(n.id, "video_playlist:"):
+		idStr := strings.TrimPrefix(n.id, "video_playlist:")
+		id, _ := strconv.ParseInt(idStr, 10, 64)
+		m.currentPlaylistID = id
+		m.activeView = viewVideoLibrary
+		m.videoList.ClearMarks()
+		m.refreshVideoPlaylistFiles(id)
 	case strings.HasPrefix(n.id, "video_filter:"):
 		idStr := strings.TrimPrefix(n.id, "video_filter:")
 		id, _ := strconv.ParseInt(idStr, 10, 64)
@@ -1936,18 +2011,29 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		name := result.text
 		db.CreateMusicPlaylist(name)
 		m.setMessage(fmt.Sprintf("Created playlist '%s'", name))
-		m.sidebar.Refresh()
-		if len(m.pendingTracks) > 0 {
-			playlists, _ := db.GetMusicPlaylists()
-			for _, p := range playlists {
-				if p.Name == name {
+
+		var newID int64
+		playlists, _ := db.GetMusicPlaylists()
+		for _, p := range playlists {
+			if p.Name == name {
+				newID = p.ID
+				if len(m.pendingTracks) > 0 {
 					for _, tp := range m.pendingTracks {
-						db.AddTrackToMusicPlaylist(p.ID, tp)
+						db.AddTrackToMusicPlaylist(newID, tp)
 					}
 					m.setMessage(fmt.Sprintf("Created playlist '%s' and added %d track(s)", name, len(m.pendingTracks)))
-					break
 				}
+				break
 			}
+		}
+
+		m.sidebar.Refresh()
+		if newID > 0 {
+			m.sidebar.ExpandByID("music_playlists")
+			m.sidebar.SelectByID(fmt.Sprintf("music_playlist:%d", newID))
+			m.currentPlaylistID = newID
+			m.activeView = viewMusicLibrary
+			m.refreshPlaylistTracks(newID)
 		}
 		m.modal = nil
 
@@ -1981,6 +2067,9 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		m.setMessage("Deleted playlist")
 		m.currentPlaylistID = 0
 		m.sidebar.Refresh()
+		m.sidebar.ExpandByID("music_playlists")
+		m.sidebar.SelectByID("music_playlists")
+		m.focusedSide = true
 		m.trackList.ClearMarks()
 		m.artistDetail.ClearMarks()
 		m.modal = nil
@@ -1992,6 +2081,80 @@ func (m model) handleModalSubmit(result modalUpdateResult) model {
 		m.setMessage("Removed from playlist")
 		m.refreshPlaylistTracks(m.currentPlaylistID)
 		m.trackList.ClearMarks()
+		m.modal = nil
+
+	case actionCreateVideoPlaylist:
+		name := result.text
+		db.CreateVideoPlaylist(name)
+		m.setMessage(fmt.Sprintf("Created video playlist '%s'", name))
+
+		var newID int64
+		playlists, _ := db.GetVideoPlaylists()
+		for _, p := range playlists {
+			if p.Name == name {
+				newID = p.ID
+				if len(m.pendingVideoFiles) > 0 {
+					for _, path := range m.pendingVideoFiles {
+						db.AddFileToVideoPlaylist(newID, path)
+					}
+					m.setMessage(fmt.Sprintf("Created video playlist '%s' and added %d item(s)", name, len(m.pendingVideoFiles)))
+				}
+				break
+			}
+		}
+
+		m.sidebar.Refresh()
+		if newID > 0 {
+			m.sidebar.ExpandByID("video_playlists")
+			m.sidebar.SelectByID(fmt.Sprintf("video_playlist:%d", newID))
+			m.currentPlaylistID = newID
+			m.activeView = viewVideoLibrary
+			m.refreshVideoPlaylistFiles(newID)
+		}
+		m.modal = nil
+
+	case actionAddToVideoPlaylist:
+		if result.text == "[New Playlist...]" {
+			m.pendingAction = actionCreateVideoPlaylist
+			m.modal = newTextInputModal(
+				"New Video Playlist Name:",
+				"Enter playlist name...",
+				"Enter: Create  Esc: Cancel",
+			)
+			m.modal.SetSize(m.width, m.height)
+			return m
+		}
+		playlists, _ := db.GetVideoPlaylists()
+		for _, p := range playlists {
+			if p.Name == result.text {
+				for _, path := range m.pendingVideoFiles {
+					db.AddFileToVideoPlaylist(p.ID, path)
+				}
+				m.setMessage(fmt.Sprintf("Added to '%s'", p.Name))
+				break
+			}
+		}
+		m.videoList.ClearMarks()
+		m.modal = nil
+
+	case actionDeleteVideoPlaylist:
+		db.DeleteVideoPlaylist(m.currentPlaylistID)
+		m.setMessage("Deleted video playlist")
+		m.currentPlaylistID = 0
+		m.sidebar.Refresh()
+		m.sidebar.ExpandByID("video_playlists")
+		m.sidebar.SelectByID("video_playlists")
+		m.focusedSide = true
+		m.videoList.ClearMarks()
+		m.modal = nil
+
+	case actionRemoveVideoFile:
+		for _, path := range m.pendingVideoFiles {
+			db.RemoveFileFromVideoPlaylist(m.currentPlaylistID, path)
+		}
+		m.setMessage("Removed from video playlist")
+		m.refreshVideoPlaylistFiles(m.currentPlaylistID)
+		m.videoList.ClearMarks()
 		m.modal = nil
 
 	case actionEditTrack:

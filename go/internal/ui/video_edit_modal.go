@@ -430,7 +430,7 @@ func (m *videoEditModal) View() string {
 			var opts []string
 			for j, opt := range f.Options {
 				if j == f.Select {
-					opts = append(opts, lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Render("▸ "+opt))
+					opts = append(opts, lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("▸ "+opt))
 				} else {
 					opts = append(opts, "  "+opt)
 				}

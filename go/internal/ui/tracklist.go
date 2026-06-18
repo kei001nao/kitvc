@@ -125,8 +125,7 @@ func (tl trackList) buildTable(width, height int, tracks []db.TrackData) table.M
 		Bold(true)
 
 	highlightStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57"))
+		Foreground(lipgloss.Color("1"))
 
 	t := table.New(cols).
 		WithRows(rows).

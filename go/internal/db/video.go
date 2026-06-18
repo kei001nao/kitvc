@@ -106,8 +106,91 @@ func AddFileToVideoPlaylist(playlistID int64, filePath string) error {
 }
 
 func RemoveFileFromVideoPlaylist(playlistID int64, filePath string) error {
-	_, err := db.Exec("DELETE FROM video_playlist_files WHERE playlist_id = ? AND file_path = ?", playlistID, filePath)
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec("DELETE FROM video_playlist_files WHERE playlist_id = ? AND file_path = ?", playlistID, filePath)
+	if err != nil {
+		return err
+	}
+
+	rows, err := tx.Query("SELECT rowid FROM video_playlist_files WHERE playlist_id = ? ORDER BY sort_order", playlistID)
+	if err != nil {
+		return err
+	}
+	var rowids []int64
+	for rows.Next() {
+		var rid int64
+		rows.Scan(&rid)
+		rowids = append(rowids, rid)
+	}
+	rows.Close()
+
+	for i, rid := range rowids {
+		_, err = tx.Exec("UPDATE video_playlist_files SET sort_order = ? WHERE rowid = ?", i+1, rid)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func DeleteVideoPlaylist(playlistID int64) error {
+	_, err := db.Exec("DELETE FROM video_playlist_files WHERE playlist_id = ?", playlistID)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec("DELETE FROM video_playlists WHERE id = ?", playlistID)
 	return err
+}
+
+func RenameVideoPlaylist(playlistID int64, name string) error {
+	_, err := db.Exec("UPDATE video_playlists SET name = ? WHERE id = ?", name, playlistID)
+	return err
+}
+
+func MoveVideoPlaylistFile(playlistID int64, fromIdx, toIdx int) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query("SELECT rowid FROM video_playlist_files WHERE playlist_id = ? ORDER BY sort_order", playlistID)
+	if err != nil {
+		return err
+	}
+	var rowids []int64
+	for rows.Next() {
+		var rid int64
+		rows.Scan(&rid)
+		rowids = append(rowids, rid)
+	}
+	rows.Close()
+
+	if fromIdx < 0 || fromIdx >= len(rowids) || toIdx < 0 || toIdx >= len(rowids) {
+		return fmt.Errorf("invalid index: from=%d to=%d len=%d", fromIdx, toIdx, len(rowids))
+	}
+
+	rid := rowids[fromIdx]
+	rowids = append(rowids[:fromIdx], rowids[fromIdx+1:]...)
+	newRowids := make([]int64, 0, len(rowids)+1)
+	newRowids = append(newRowids, rowids[:toIdx]...)
+	newRowids = append(newRowids, rid)
+	newRowids = append(newRowids, rowids[toIdx:]...)
+
+	for i, r := range newRowids {
+		_, err = tx.Exec("UPDATE video_playlist_files SET sort_order = ? WHERE rowid = ?", i+1, r)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 func GetVideos() ([]VideoData, error) {

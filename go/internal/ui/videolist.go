@@ -58,8 +58,7 @@ func (vl videoList) buildTable(width, height int, videos []db.VideoData) table.M
 		Bold(true)
 
 	highlightStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57"))
+		Foreground(lipgloss.Color("1"))
 
 	t := table.New(cols).
 		WithRows(rows).

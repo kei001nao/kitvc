@@ -114,8 +114,7 @@ func newVideoFetchModal(apiKey, query string, isTV bool, initialSeason, initialE
 
 func (m *videoFetchModal) initTables() {
 	highlightStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57"))
+		Foreground(lipgloss.Color("1"))
 
 	headerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("5")).
@@ -755,7 +754,7 @@ func (m *videoFetchModal) View() string {
 	opts := []string{"Movie", "TV Show", "Music Video"}
 	for _, opt := range opts {
 		if opt == m.mediaType {
-			header.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Render(" "+opt+" ") + "  ")
+			header.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(" "+opt+" ") + "  ")
 		} else {
 			header.WriteString(" " + opt + "   ")
 		}

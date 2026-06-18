@@ -210,8 +210,7 @@ func (m *modal) View() string {
 		for i, item := range m.items {
 			if i == m.cursor {
 				itemViews = append(itemViews, lipgloss.NewStyle().
-					Foreground(lipgloss.Color("229")).
-					Background(lipgloss.Color("57")).
+					Foreground(lipgloss.Color("1")).
 					Render("▸ "+item))
 			} else {
 				itemViews = append(itemViews, "  "+item)

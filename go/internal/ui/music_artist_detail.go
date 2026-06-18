@@ -35,8 +35,7 @@ func newMusicArtistDetail(width, height int, artist string, albums []db.Album) m
 		Bold(true)
 
 	highlightStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57"))
+		Foreground(lipgloss.Color("1"))
 
 	// 1. Albums table (Upper)
 	albumRows := make([]table.Row, len(albums))

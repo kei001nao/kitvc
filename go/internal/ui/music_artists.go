@@ -30,8 +30,7 @@ func newMusicArtists(width, height int, artists []string) musicArtists {
 		Bold(true)
 
 	highlightStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57"))
+		Foreground(lipgloss.Color("1"))
 
 	cols := []table.Column{
 		table.NewColumn(artistColName, "Artist", 40).WithStyle(lipgloss.NewStyle().Align(lipgloss.Left)),

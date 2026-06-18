@@ -77,7 +77,7 @@ func newMusicFetchModal(query, artist, album string) *musicFetchModal {
 		help:        "Enter: Search  Tab: Switch Focus  Esc: Cancel",
 		releaseTable: table.New(releaseCols(80)).
 			Focused(false).
-			HighlightStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57"))).
+			HighlightStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("1"))).
 			Border(table.Border{
 				Top: " ", Bottom: " ", Left: " ", Right: " ",
 				TopLeft: " ", TopRight: " ", BottomLeft: " ", BottomRight: " ",
