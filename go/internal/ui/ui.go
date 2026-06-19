@@ -164,6 +164,8 @@ type model struct {
 	tmdbBatchIndex    int
 	tmdbBatchTotal    int
 	tmdbBatchCancelled bool
+
+	tty ttyWriter
 }
 
 func InitialModel(cfg *config.Config) model {
@@ -186,6 +188,7 @@ func InitialModel(cfg *config.Config) model {
 		focusedSide: true,
 		activeView:  viewMusicLibrary,
 		sidebar:     newSidebar(cfg.UI.SidebarWidth, 20),
+		tty:         stdTTY,
 	}
 }
 
@@ -195,12 +198,8 @@ func (m model) Init() tea.Cmd {
 
 func hideCursorCmd() tea.Cmd {
 	return func() tea.Msg {
-		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
-		if err == nil {
-			f.WriteString("\x1b[?25l")
-			f.Sync()
-			f.Close()
-		}
+		stdTTY.WriteString("\x1b[?25l")
+		stdTTY.Sync()
 		return nil
 	}
 }
@@ -2964,13 +2963,8 @@ func (m *model) refreshCurrentVideoView() {
 
 func (m *model) coverClearCmd() tea.Cmd {
 	return func() tea.Msg {
-		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
-		if err != nil {
-			return nil
-		}
-		defer f.Close()
-		f.WriteString("\x1b_Ga=d,i=1\x1b\\")
-		f.Sync()
+		m.tty.WriteString("\x1b_Ga=d,i=1\x1b\\")
+		m.tty.Sync()
 		return nil
 	}
 }
@@ -3000,19 +2994,12 @@ func (m *model) coverDisplayCmd() tea.Cmd {
 			kittyOut = "\x1b_Gi=1," + kittyOut[3:]
 		}
 		
-		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
-		if err != nil {
-			return nil
-		}
-		defer f.Close()
-
-		// Hide cursor, move to position, draw, then hide cursor again to be sure.
-		f.WriteString("\x1b[?25l") 
-		f.WriteString("\x1b_Ga=d,i=1\x1b\\") // Clear old ID=1 image before drawing new one
-		fmt.Fprintf(f, "\x1b[%d;1H", m.sidebar.CoverRow()+1)
-		f.WriteString(kittyOut)
-		f.WriteString("\x1b[?25l")
-		f.Sync()
+		m.tty.WriteString("\x1b[?25l")
+		m.tty.WriteString("\x1b_Ga=d,i=1\x1b\\")
+		fmt.Fprintf(m.tty, "\x1b[%d;1H", m.sidebar.CoverRow()+1)
+		m.tty.WriteString(kittyOut)
+		m.tty.WriteString("\x1b[?25l")
+		m.tty.Sync()
 		return nil
 	}
 }
@@ -3029,26 +3016,14 @@ func (m *model) syncPosterCmd() tea.Cmd {
 	kitty := m.videoFetch.CachedKitty()
 	return func() tea.Msg {
 		log.Printf("[DEBUGLOG] syncPosterCmd: start writing to TTY (ID=3) at row=%d col=%d len=%d", row+1, col+1, len(kitty))
-		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
-		if err != nil {
-			log.Printf("[ERROR] syncPosterCmd: failed to open TTY: %v", err)
-			return nil
-		}
-		defer f.Close()
-		
-		// 1. Save cursor and move to position
-		// 2. Clear image with ID 3
-		// 3. Write image data
-		// 4. Restore cursor
-		f.WriteString("\x1b[?25l") // Hide cursor
-		f.WriteString("\x1b[s")
-		fmt.Fprintf(f, "\x1b[%d;%dH", row+1, col+1)
-		f.WriteString("\x1b_Ga=d,i=3\x1b\\")
-		f.WriteString(kitty)
-		f.WriteString("\x1b[u")
-		f.WriteString("\x1b[?25l") // Hide cursor again after restore
-		
-		f.Sync()
+		m.tty.WriteString("\x1b[?25l")
+		m.tty.WriteString("\x1b[s")
+		fmt.Fprintf(m.tty, "\x1b[%d;%dH", row+1, col+1)
+		m.tty.WriteString("\x1b_Ga=d,i=3\x1b\\")
+		m.tty.WriteString(kitty)
+		m.tty.WriteString("\x1b[u")
+		m.tty.WriteString("\x1b[?25l")
+		m.tty.Sync()
 		log.Printf("[DEBUGLOG] syncPosterCmd: finished writing")
 		return nil
 	}
@@ -3062,22 +3037,14 @@ func (m *model) syncVideoEditPosterCmd() tea.Cmd {
 	kitty := m.videoEdit.CachedKitty()
 	return func() tea.Msg {
 		log.Printf("[DEBUGLOG] syncVideoEditPosterCmd: start writing to TTY (ID=2) at row=%d col=%d len=%d", row+1, col+1, len(kitty))
-		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
-		if err != nil {
-			log.Printf("[ERROR] syncVideoEditPosterCmd: failed to open TTY: %v", err)
-			return nil
-		}
-		defer f.Close()
-		
-		f.WriteString("\x1b[?25l") // Hide cursor
-		f.WriteString("\x1b[s")
-		fmt.Fprintf(f, "\x1b[%d;%dH", row+1, col+1)
-		f.WriteString("\x1b_Ga=d,i=2\x1b\\")
-		f.WriteString(kitty)
-		f.WriteString("\x1b[u")
-		f.WriteString("\x1b[?25l") // Hide cursor again after restore
-		
-		f.Sync()
+		m.tty.WriteString("\x1b[?25l")
+		m.tty.WriteString("\x1b[s")
+		fmt.Fprintf(m.tty, "\x1b[%d;%dH", row+1, col+1)
+		m.tty.WriteString("\x1b_Ga=d,i=2\x1b\\")
+		m.tty.WriteString(kitty)
+		m.tty.WriteString("\x1b[u")
+		m.tty.WriteString("\x1b[?25l")
+		m.tty.Sync()
 		log.Printf("[DEBUGLOG] syncVideoEditPosterCmd: finished writing")
 		return nil
 	}
@@ -3105,19 +3072,13 @@ func (m *model) posterClearCmd() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
-		if err != nil {
-			return nil
-		}
-		defer f.Close()
-		// Save cursor, move to poster top-left, delete image with ID 3, restore cursor, hide cursor
-		f.WriteString("\x1b[?25l")
-		f.WriteString("\x1b[s")
-		fmt.Fprintf(f, "\x1b[%d;%dH", row+1, col+1)
-		f.WriteString("\x1b_Ga=d,i=3\x1b\\")
-		f.WriteString("\x1b[u")
-		f.WriteString("\x1b[?25l")
-		f.Sync()
+		m.tty.WriteString("\x1b[?25l")
+		m.tty.WriteString("\x1b[s")
+		fmt.Fprintf(m.tty, "\x1b[%d;%dH", row+1, col+1)
+		m.tty.WriteString("\x1b_Ga=d,i=3\x1b\\")
+		m.tty.WriteString("\x1b[u")
+		m.tty.WriteString("\x1b[?25l")
+		m.tty.Sync()
 		return nil
 	}
 }
@@ -3167,15 +3128,9 @@ func (m *model) posterDisplayCmd() tea.Cmd {
 
 func (m *model) videoEditPosterClearCmd() tea.Cmd {
 	return func() tea.Msg {
-		f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
-		if err != nil {
-			return nil
-		}
-		defer f.Close()
-		// Clear ONLY image with ID 2
-		f.WriteString("\x1b_Ga=d,i=2\x1b\\")
-		f.WriteString("\x1b[?25l")
-		f.Sync()
+		m.tty.WriteString("\x1b_Ga=d,i=2\x1b\\")
+		m.tty.WriteString("\x1b[?25l")
+		m.tty.Sync()
 		return nil
 	}
 }
