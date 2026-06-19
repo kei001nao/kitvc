@@ -271,7 +271,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.scanPhase == "video" {
 			prefix = "Scanning video"
 		}
-		m.message = fmt.Sprintf("%s... %d/%d", prefix, msg.current, msg.total)
+		filePart := ""
+		if msg.currentFile != "" {
+			filePart = " - " + filepath.Base(msg.currentFile)
+		}
+		m.message = fmt.Sprintf("%s... %d/%d%s", prefix, msg.current, msg.total, filePart)
 		if m.scanCancelled || m.scanIndex >= m.scanTotal {
 			m.scanning = false
 			m.scanCancelled = false
@@ -280,7 +284,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err := library.ProcessAllAlbumCovers(); err != nil {
 					m.setMessage(err.Error())
 				}
-				// Cleanup empty albums after normalization
 				db.DeleteEmptyAlbums()
 			}
 			m.refreshActiveView()
@@ -292,6 +295,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.processNextScanItem()
+	case scanCountMsg:
+		prefix := "Scanning music"
+		if m.scanPhase == "video" {
+			prefix = "Scanning video"
+		}
+		m.message = fmt.Sprintf("%s... 0/%d - reading metadata", prefix, msg.total)
+		return m, nil
 	case scanReadyMsg:
 		if len(msg.tracks) > 0 {
 			m.scanning = true
@@ -897,8 +907,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.message = "Scanning..."
 			if m.activeView == viewVideoLibrary || m.activeView == viewVideoContinue || m.activeView == viewVideoRecent || m.activeView == viewVideoHealth {
+				m.scanPhase = "video"
 				return m, m.scanVideoCmd()
 			}
+			m.scanPhase = "music"
 			return m, m.scanMusicCmd()
 		case "enter":
 			if m.focusedSide {
@@ -3202,8 +3214,13 @@ type scanFinishedMsg struct {
 }
 
 type scanProgressMsg struct {
-	current int
-	total   int
+	current     int
+	total       int
+	currentFile string
+}
+
+type scanCountMsg struct {
+	total int
 }
 
 type scanReadyMsg struct {
@@ -3222,29 +3239,41 @@ type musicBatchProgressMsg struct {
 }
 
 func (m model) scanMusicCmd() tea.Cmd {
-	return func() tea.Msg {
-		tracks, err := library.ScanMusic(m.config.Music.Directories)
-		if err != nil {
-			return scanReadyMsg{}
-		}
-		return scanReadyMsg{tracks: tracks}
-	}
+	return tea.Sequence(
+		func() tea.Msg {
+			return scanCountMsg{total: library.CountAudioFiles(m.config.Music.Directories)}
+		},
+		func() tea.Msg {
+			tracks, err := library.ScanMusic(m.config.Music.Directories)
+			if err != nil {
+				return scanReadyMsg{}
+			}
+			return scanReadyMsg{tracks: tracks}
+		},
+	)
 }
 
 func (m model) scanVideoCmd() tea.Cmd {
-	return func() tea.Msg {
-		videos, err := library.ScanVideo(m.config.Video.Directories)
-		if err != nil {
-			return scanReadyMsg{}
-		}
-		return scanReadyMsg{videos: videos}
-	}
+	return tea.Sequence(
+		func() tea.Msg {
+			return scanCountMsg{total: library.CountVideoFiles(m.config.Video.Directories)}
+		},
+		func() tea.Msg {
+			videos, err := library.ScanVideo(m.config.Video.Directories)
+			if err != nil {
+				return scanReadyMsg{}
+			}
+			return scanReadyMsg{videos: videos}
+		},
+	)
 }
 
 func (m model) processNextScanItem() tea.Cmd {
 	return func() tea.Msg {
+		currentFile := ""
 		if m.scanPhase == "music" {
 			t := m.scanTracks[m.scanIndex]
+			currentFile = t.Path
 			db.UpdateMusicTrack(db.TrackData{
 				Path:        t.Path,
 				MTime:       t.MTime,
@@ -3259,6 +3288,7 @@ func (m model) processNextScanItem() tea.Cmd {
 			}, false)
 		} else {
 			v := m.scanVideos[m.scanIndex]
+			currentFile = v.Path
 			db.UpdateVideoFile(db.VideoData{
 				Path:     v.Path,
 				Filename: v.Filename,
@@ -3268,7 +3298,7 @@ func (m model) processNextScanItem() tea.Cmd {
 				MTime:    v.MTime,
 			})
 		}
-		return scanProgressMsg{current: m.scanIndex + 1, total: m.scanTotal}
+		return scanProgressMsg{current: m.scanIndex + 1, total: m.scanTotal, currentFile: currentFile}
 	}
 }
 

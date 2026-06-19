@@ -1,6 +1,7 @@
 package library
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dhowden/tag"
 )
@@ -75,7 +77,9 @@ type ffprobeOutput struct {
 }
 
 func readVideoMetadata(path string) (Video, error) {
-	cmd := exec.Command("ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path)
 	out, err := cmd.Output()
 	if err != nil {
 		return Video{}, err
@@ -187,8 +191,35 @@ func readAudioTags(path string) (Track, error) {
 		TrackNum:    trackNum,
 		DiscNum:     discNum,
 		Genre:       m.Genre(),
-		Duration: getAudioDuration(path),
+		Duration:    getAudioDuration(path),
 	}, nil
+}
+
+func CountAudioFiles(directories []string) int {
+	return countFiles(directories, AudioExtensions)
+}
+
+func CountVideoFiles(directories []string) int {
+	return countFiles(directories, VideoExtensions)
+}
+
+func countFiles(directories []string, exts map[string]bool) int {
+	var count int
+	for _, dir := range directories {
+		filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			if exts[strings.ToLower(filepath.Ext(path))] {
+				count++
+			}
+			return nil
+		})
+	}
+	return count
 }
 
 func parseFfprobeDuration(durationStr string) int {
@@ -197,7 +228,9 @@ func parseFfprobeDuration(durationStr string) int {
 }
 
 func getAudioDuration(path string) int {
-	cmd := exec.Command("ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path)
 	out, err := cmd.Output()
 	if err != nil {
 		return 0

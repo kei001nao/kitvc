@@ -65,7 +65,6 @@ func UpdateMusicTrack(t TrackData, force bool) error {
 		// Try more flexible matching in Go
 		rows, errQuery := db.Query("SELECT id, title FROM music_albums WHERE artist = ?", t.Artist)
 		if errQuery == nil {
-			defer rows.Close()
 			targetNorm := t.Album
 			targetBase := getBaseAlbumName(targetNorm)
 
@@ -90,6 +89,7 @@ func UpdateMusicTrack(t TrackData, force bool) error {
 					break
 				}
 			}
+			rows.Close()
 		}
 
 		if albumID != 0 {
