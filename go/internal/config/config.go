@@ -73,7 +73,14 @@ func LoadConfig() (*Config, error) {
 
 	configPath := filepath.Join(configDir, "config.toml")
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return DefaultConfig(), nil
+		cfg := DefaultConfig()
+		if err := os.MkdirAll(configDir, 0755); err == nil {
+			if f, ferr := os.Create(configPath); ferr == nil {
+				toml.NewEncoder(f).Encode(cfg)
+				f.Close()
+			}
+		}
+		return cfg, nil
 	}
 
 	var cfg Config
