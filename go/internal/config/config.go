@@ -50,19 +50,19 @@ type Theme struct {
 }
 
 func GetConfigDir() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "kitvc"), nil
+	return filepath.Join(dir, "kitvc"), nil
 }
 
 func GetCacheDir() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".cache", "kitvc"), nil
+	return filepath.Join(dir, "kitvc"), nil
 }
 
 func LoadConfig() (*Config, error) {
