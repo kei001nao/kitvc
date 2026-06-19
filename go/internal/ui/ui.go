@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -166,6 +165,8 @@ type model struct {
 	tmdbBatchCancelled bool
 
 	tty ttyWriter
+
+	displayer imageDisplayer
 }
 
 func InitialModel(cfg *config.Config) model {
@@ -189,6 +190,7 @@ func InitialModel(cfg *config.Config) model {
 		activeView:  viewMusicLibrary,
 		sidebar:     newSidebar(cfg.UI.SidebarWidth, 20),
 		tty:         stdTTY,
+		displayer:   newImageDisplayer(),
 	}
 }
 
@@ -584,7 +586,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.videoFetch = nil
 			return m, tea.Batch(fetchCmd, clearCmd, hideCursorCmd())
 		}
-		// Trigger chafa poster display if poster is ready and state has changed
+		// Render poster display if poster is ready and state has changed
 		var posterCmd tea.Cmd
 		if path := m.videoFetch.PosterPath(); path != "" {
 			row, col, _, _ := m.posterPos()
@@ -658,7 +660,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmd, clearCmd, hideCursorCmd())
 		}
 
-		// Trigger chafa poster display if poster is ready and state has changed
+		// Render poster display if poster is ready and state has changed
 		var posterCmd tea.Cmd
 		if path := m.videoEdit.PosterPath(); path != "" {
 			sl := m.videoEdit.OverlayStartLine()
@@ -2977,23 +2979,16 @@ func (m *model) coverDisplayCmd() tea.Cmd {
 	cols := m.sidebar.CoverCols()
 	rows := m.sidebar.CoverRows()
 	return func() tea.Msg {
-		// Use high-resolution Kitty protocol.
-		cmd := exec.Command("chafa", "-f", "kitty",
-			"--symbols", "none",
-			"--probe", "off",
-			"--size", fmt.Sprintf("%dx%d", cols, rows),
-			path)
-		cmd.Env = append(os.Environ(), "TERM=xterm-kitty")
-		out, err := cmd.Output()
+		data, err := m.displayer.Render(path, cols, rows)
 		if err != nil {
 			return nil
 		}
-		
-		kittyOut := string(out)
+
+		kittyOut := string(data)
 		if strings.HasPrefix(kittyOut, "\x1b_G") {
 			kittyOut = "\x1b_Gi=1," + kittyOut[3:]
 		}
-		
+
 		m.tty.WriteString("\x1b[?25l")
 		m.tty.WriteString("\x1b_Ga=d,i=1\x1b\\")
 		fmt.Fprintf(m.tty, "\x1b[%d;1H", m.sidebar.CoverRow()+1)
@@ -3101,22 +3096,14 @@ func (m *model) posterDisplayCmd() tea.Cmd {
 			return nil
 		}
 
-		// Draw new poster with chafa
-		cmd := exec.Command("chafa", "-f", "kitty",
-			"--symbols", "none",
-			"--probe", "off",
-			"--size", fmt.Sprintf("%dx%d", cols, rows),
-			path)
-		cmd.Env = append(os.Environ(), "TERM=xterm-kitty")
-		out, err := cmd.Output()
+		data, err := m.displayer.Render(path, cols, rows)
 		if err != nil {
 			return nil
 		}
 
-		kittyOut := string(out)
-		log.Printf("[DEBUGLOG] posterDisplayCmd: chafa output len=%d, path=%s", len(kittyOut), path)
+		kittyOut := string(data)
+		log.Printf("[DEBUGLOG] posterDisplayCmd: render output len=%d, path=%s", len(kittyOut), path)
 
-		// Inject ID=3 for search modal posters
 		kittyOut = strings.ReplaceAll(kittyOut, "\x1b_G", "\x1b_Gi=3,")
 		if len(kittyOut) > 50 {
 			log.Printf("[DEBUGLOG] posterDisplayCmd: first 50 chars: %q", kittyOut[:50])
@@ -3170,21 +3157,14 @@ func (m *model) videoEditPosterDisplayCmd() tea.Cmd {
 			return nil
 		}
 
-		cmd := exec.Command("chafa", "-f", "kitty",
-			"--symbols", "none",
-			"--probe", "off",
-			"--size", fmt.Sprintf("%dx%d", cols, rows),
-			path)
-		cmd.Env = append(os.Environ(), "TERM=xterm-kitty")
-		out, err := cmd.Output()
+		data, err := m.displayer.Render(path, cols, rows)
 		if err != nil {
 			return nil
 		}
 
-		kittyOut := string(out)
-		log.Printf("[DEBUGLOG] videoEditPosterDisplayCmd: chafa output len=%d, path=%s", len(kittyOut), path)
+		kittyOut := string(data)
+		log.Printf("[DEBUGLOG] videoEditPosterDisplayCmd: render output len=%d, path=%s", len(kittyOut), path)
 
-		// Inject ID=2 for edit modal posters
 		kittyOut = strings.ReplaceAll(kittyOut, "\x1b_G", "\x1b_Gi=2,")
 		if len(kittyOut) > 50 {
 			log.Printf("[DEBUGLOG] videoEditPosterDisplayCmd: first 50 chars: %q", kittyOut[:50])
