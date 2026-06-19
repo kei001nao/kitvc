@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/textarea"
@@ -128,7 +129,7 @@ func newVideoEditModal(filename string, labels []string, fieldKinds []videoEditF
 		m.posterPath = initialValues[13] // Prefer local path for display
 	} else if len(initialValues) > 12 && initialValues[12] != "" {
 		// If no local path but it looks like a local path (starts with /), use it
-		if strings.HasPrefix(initialValues[12], "/") {
+		if filepath.IsAbs(initialValues[12]) {
 			m.posterPath = initialValues[12]
 		}
 	}

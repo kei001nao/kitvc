@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -449,7 +450,7 @@ func GetVideoPosterPath(path string) string {
 		}
 	}
 	if posterPath != "" {
-		if strings.HasPrefix(posterPath, "/") {
+		if filepath.IsAbs(posterPath) {
 			if _, err := os.Stat(posterPath); err == nil {
 				return posterPath
 			}
