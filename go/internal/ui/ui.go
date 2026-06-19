@@ -170,7 +170,7 @@ type model struct {
 
 func InitialModel(cfg *config.Config) model {
 	// Socket path for mpv IPC
-	socketPath := fmt.Sprintf("/tmp/kitvc-mpv-%d.sock", os.Getpid())
+	socketPath := player.MpvSocketPath(os.Getpid())
 	p := player.NewMpvPlayer(socketPath, cfg.Player.MpvArgs)
 	vol := float64(cfg.Player.Volume)
 	if err := p.Start(); err != nil {

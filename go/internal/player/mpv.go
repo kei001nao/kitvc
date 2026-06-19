@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -34,8 +32,7 @@ func NewMpvPlayer(socketPath string, args []string) *MpvPlayer {
 }
 
 func (p *MpvPlayer) Start() error {
-	// Clean up existing socket
-	os.Remove(p.socketPath)
+	mpvCleanupSocket(p.socketPath)
 
 	fullArgs := append([]string{
 		"--idle",
@@ -47,7 +44,6 @@ func (p *MpvPlayer) Start() error {
 
 	p.cmd = exec.Command("mpv", fullArgs...)
 
-	// Capture stderr for debugging
 	stderr, err := p.cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("failed to create stderr pipe: %w", err)
@@ -57,27 +53,24 @@ func (p *MpvPlayer) Start() error {
 		return fmt.Errorf("failed to start mpv: %w", err)
 	}
 
-	// Read stderr in a goroutine
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
-			// log.Printf("mpv stderr: %s", scanner.Text())
 		}
 	}()
 
-	// Wait for socket to be ready
 	var conn net.Conn
 	var dialErr error
 	for i := 0; i < 30; i++ {
-		conn, dialErr = net.Dial("unix", p.socketPath)
+		conn, dialErr = mpvDial(p.socketPath)
 		if dialErr == nil {
 			break
 		}
-		
+
 		if p.cmd.ProcessState != nil && p.cmd.ProcessState.Exited() {
 			return fmt.Errorf("mpv exited immediately")
 		}
-		
+
 		time.Sleep(200 * time.Millisecond)
 	}
 
@@ -86,10 +79,9 @@ func (p *MpvPlayer) Start() error {
 	}
 
 	p.conn = conn
-	
-	// Start event loop
+
 	go p.readLoop()
-	
+
 	return nil
 }
 
@@ -117,10 +109,9 @@ func (p *MpvPlayer) readLoop() {
 
 func (p *MpvPlayer) handleEvent(event map[string]interface{}) {
 	evtName, _ := event["event"].(string)
-	
+
 	switch evtName {
 	case "file-loaded":
-		// Auto prefetch next track for gapless
 		p.mu.Lock()
 		if p.currentIdx >= 0 && p.currentIdx+1 < len(p.queue) {
 			nextPath := p.queue[p.currentIdx+1]
@@ -194,8 +185,7 @@ func (p *MpvPlayer) IsRunning() bool {
 	if p.cmd == nil || p.cmd.Process == nil {
 		return false
 	}
-	err := p.cmd.Process.Signal(os.Signal(syscall.Signal(0)))
-	return err == nil
+	return mpvIsRunning(p.cmd)
 }
 
 func (p *MpvPlayer) EnsureRunning() error {
@@ -226,7 +216,6 @@ func (p *MpvPlayer) LoadFile(path string) error {
 	}
 	p.SetProperty("pause", false)
 
-	// Use 'replace' to clear current playlist and start new one
 	cmd := map[string]interface{}{
 		"command": []interface{}{"loadfile", path, "replace"},
 	}
@@ -286,14 +275,14 @@ func (p *MpvPlayer) GetProperty(name string) (interface{}, error) {
 	if err := p.EnsureRunning(); err != nil {
 		return nil, err
 	}
-	
+
 	requestID := uint32(time.Now().UnixNano())
 	ch := make(chan interface{}, 1)
-	
+
 	p.mu.Lock()
 	p.pending[requestID] = ch
 	p.mu.Unlock()
-	
+
 	cmd := map[string]interface{}{
 		"command":    []interface{}{"get_property", name},
 		"request_id": requestID,
