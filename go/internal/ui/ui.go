@@ -2992,6 +2992,24 @@ func (m *model) coverClearCmd() tea.Cmd {
 	}
 }
 
+func (m *model) writeImageToTTY(data string, startRow, startCol int) {
+	if strings.HasPrefix(data, "\x1b_G") || strings.HasPrefix(data, "\x1bP") {
+		// Kitty protocol (\x1b_G) or Sixel protocol (\x1bP)
+		fmt.Fprintf(m.tty, "\x1b[%d;%dH", startRow, startCol)
+		m.tty.WriteString(data)
+	} else {
+		// ANSI block graphics (Halfblocks): split by newline and write line-by-line
+		lines := strings.Split(data, "\n")
+		for i, line := range lines {
+			if line == "" && i == len(lines)-1 {
+				break
+			}
+			fmt.Fprintf(m.tty, "\x1b[%d;%dH", startRow+i, startCol)
+			m.tty.WriteString(line)
+		}
+	}
+}
+
 func (m *model) coverDisplayCmd() tea.Cmd {
 	path := m.sidebar.CoverPath()
 	if path == "" || !m.sidebar.HasCover() {
@@ -3012,8 +3030,7 @@ func (m *model) coverDisplayCmd() tea.Cmd {
 
 		m.tty.WriteString("\x1b[?25l")
 		m.tty.WriteString("\x1b_Ga=d,i=1\x1b\\")
-		fmt.Fprintf(m.tty, "\x1b[%d;1H", m.sidebar.CoverRow()+1)
-		m.tty.WriteString(kittyOut)
+		m.writeImageToTTY(kittyOut, m.sidebar.CoverRow()+1, 1)
 		m.tty.WriteString("\x1b[?25l")
 		m.tty.Sync()
 		return nil
@@ -3034,9 +3051,8 @@ func (m *model) syncPosterCmd() tea.Cmd {
 		log.Printf("[DEBUGLOG] syncPosterCmd: start writing to TTY (ID=3) at row=%d col=%d len=%d", row+1, col+1, len(kitty))
 		m.tty.WriteString("\x1b[?25l")
 		m.tty.WriteString("\x1b[s")
-		fmt.Fprintf(m.tty, "\x1b[%d;%dH", row+1, col+1)
 		m.tty.WriteString("\x1b_Ga=d,i=3\x1b\\")
-		m.tty.WriteString(kitty)
+		m.writeImageToTTY(kitty, row+1, col+1)
 		m.tty.WriteString("\x1b[u")
 		m.tty.WriteString("\x1b[?25l")
 		m.tty.Sync()
@@ -3055,9 +3071,8 @@ func (m *model) syncVideoEditPosterCmd() tea.Cmd {
 		log.Printf("[DEBUGLOG] syncVideoEditPosterCmd: start writing to TTY (ID=2) at row=%d col=%d len=%d", row+1, col+1, len(kitty))
 		m.tty.WriteString("\x1b[?25l")
 		m.tty.WriteString("\x1b[s")
-		fmt.Fprintf(m.tty, "\x1b[%d;%dH", row+1, col+1)
 		m.tty.WriteString("\x1b_Ga=d,i=2\x1b\\")
-		m.tty.WriteString(kitty)
+		m.writeImageToTTY(kitty, row+1, col+1)
 		m.tty.WriteString("\x1b[u")
 		m.tty.WriteString("\x1b[?25l")
 		m.tty.Sync()

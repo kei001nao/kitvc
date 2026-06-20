@@ -19,9 +19,14 @@ func (d *termimgDisplayer) Render(path string, cols, rows int) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open image: %w", err)
 	}
-	out, err := img.Width(cols).Height(rows).Render()
+	// Try Sixel for high-resolution rendering
+	out, err := img.Width(cols).Height(rows).Protocol(termimg.Sixel).Render()
 	if err != nil {
-		return nil, fmt.Errorf("render image: %w", err)
+		// Fallback to auto-detection (which might fall back to halfblocks)
+		out, err = img.Width(cols).Height(rows).Protocol(termimg.Auto).Render()
+		if err != nil {
+			return nil, fmt.Errorf("render image: %w", err)
+		}
 	}
 	return []byte(out), nil
 }
