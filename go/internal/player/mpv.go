@@ -2,13 +2,20 @@ package player
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
 	"sync"
 	"time"
 )
+
+type cmdRequest struct {
+	data   []byte
+	result chan<- error
+}
 
 type MpvPlayer struct {
 	cmd           *exec.Cmd
@@ -20,6 +27,7 @@ type MpvPlayer struct {
 	pending       map[uint32]chan interface{}
 	mu            sync.Mutex
 	completedPath string
+	cmdCh         chan cmdRequest
 }
 
 func NewMpvPlayer(socketPath string, args []string) *MpvPlayer {
@@ -32,6 +40,7 @@ func NewMpvPlayer(socketPath string, args []string) *MpvPlayer {
 }
 
 func (p *MpvPlayer) Start() error {
+	log.Printf("[DEBUG] MpvPlayer.Start: socketPath=%s", p.socketPath)
 	mpvCleanupSocket(p.socketPath)
 
 	fullArgs := append([]string{
@@ -49,9 +58,13 @@ func (p *MpvPlayer) Start() error {
 		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
+	mpvSetSysProcAttr(p.cmd)
+
 	if err := p.cmd.Start(); err != nil {
+		log.Printf("[DEBUG] MpvPlayer.Start: failed: %v", err)
 		return fmt.Errorf("failed to start mpv: %w", err)
 	}
+	log.Printf("[DEBUG] MpvPlayer.Start: mpv started, pid=%d", p.cmd.Process.Pid)
 
 	go func() {
 		scanner := bufio.NewScanner(stderr)
@@ -59,51 +72,66 @@ func (p *MpvPlayer) Start() error {
 		}
 	}()
 
+	return nil
+}
+
+func (p *MpvPlayer) ensureIPC() error {
+	if p.conn != nil {
+		return nil
+	}
+	log.Printf("[DEBUG] MpvPlayer.ensureIPC: connecting to %s", p.socketPath)
+
 	var conn net.Conn
 	var dialErr error
 	for i := 0; i < 30; i++ {
 		conn, dialErr = mpvDial(p.socketPath)
 		if dialErr == nil {
+			log.Printf("[DEBUG] MpvPlayer.ensureIPC: connected on attempt %d", i+1)
 			break
 		}
 
-		if p.cmd.ProcessState != nil && p.cmd.ProcessState.Exited() {
-			return fmt.Errorf("mpv exited immediately")
+		if p.cmd != nil && p.cmd.ProcessState != nil && p.cmd.ProcessState.Exited() {
+			log.Printf("[DEBUG] MpvPlayer.ensureIPC: mpv exited during connect")
+			return fmt.Errorf("mpv exited before ipc connect")
 		}
 
 		time.Sleep(200 * time.Millisecond)
 	}
 
 	if dialErr != nil {
+		log.Printf("[DEBUG] MpvPlayer.ensureIPC: failed after 30 attempts: %v", dialErr)
 		return fmt.Errorf("failed to connect to mpv ipc after 6s: %w", dialErr)
 	}
 
 	p.conn = conn
-
-	go p.readLoop()
-
+	log.Printf("[DEBUG] MpvPlayer.ensureIPC: spawning ipc handler")
+	p.startIPC()
 	return nil
 }
 
-func (p *MpvPlayer) readLoop() {
-	scanner := bufio.NewScanner(p.conn)
-	for scanner.Scan() {
-		var resp map[string]interface{}
-		if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
-			continue
-		}
+func (p *MpvPlayer) processLine(line []byte) {
+	line = bytes.TrimRight(line, "\r\n")
+	if len(line) == 0 {
+		return
+	}
+	log.Printf("[DEBUG] processLine: got %d bytes: %s", len(line), string(line))
 
-		if _, ok := resp["event"]; ok {
-			p.handleEvent(resp)
-		} else if id, ok := resp["request_id"].(float64); ok {
-			p.mu.Lock()
-			ch, exists := p.pending[uint32(id)]
-			if exists {
-				delete(p.pending, uint32(id))
-				ch <- resp["data"]
-			}
-			p.mu.Unlock()
+	var resp map[string]interface{}
+	if err := json.Unmarshal(line, &resp); err != nil {
+		log.Printf("[DEBUG] processLine: json error: %v", err)
+		return
+	}
+
+	if _, ok := resp["event"]; ok {
+		p.handleEvent(resp)
+	} else if id, ok := resp["request_id"].(float64); ok {
+		p.mu.Lock()
+		ch, exists := p.pending[uint32(id)]
+		if exists {
+			delete(p.pending, uint32(id))
+			ch <- resp["data"]
 		}
+		p.mu.Unlock()
 	}
 }
 
@@ -192,8 +220,16 @@ func (p *MpvPlayer) EnsureRunning() error {
 	if p.conn != nil && p.IsRunning() {
 		return nil
 	}
-	p.Stop()
-	return p.Start()
+	log.Printf("[DEBUG] EnsureRunning: conn=%v IsRunning=%v", p.conn != nil, p.IsRunning())
+	if !p.IsRunning() {
+		log.Printf("[DEBUG] EnsureRunning: mpv not running, restarting")
+		p.Stop()
+		if err := p.Start(); err != nil {
+			log.Printf("[DEBUG] EnsureRunning: restart failed: %v", err)
+			return err
+		}
+	}
+	return p.ensureIPC()
 }
 
 func (p *MpvPlayer) Stop() {
@@ -204,8 +240,7 @@ func (p *MpvPlayer) Stop() {
 	}
 	p.mu.Unlock()
 	if p.cmd != nil && p.cmd.Process != nil {
-		p.cmd.Process.Kill()
-		p.cmd.Wait()
+		mpvKill(p.cmd)
 		p.cmd = nil
 	}
 }
@@ -294,10 +329,13 @@ func (p *MpvPlayer) GetProperty(name string) (interface{}, error) {
 		return nil, err
 	}
 
+	log.Printf("[DEBUG] GetProperty(%s): waiting for response", name)
 	select {
 	case res := <-ch:
+		log.Printf("[DEBUG] GetProperty(%s): got response", name)
 		return res, nil
 	case <-time.After(500 * time.Millisecond):
+		log.Printf("[DEBUG] GetProperty(%s): timeout", name)
 		p.mu.Lock()
 		delete(p.pending, requestID)
 		p.mu.Unlock()
@@ -306,22 +344,13 @@ func (p *MpvPlayer) GetProperty(name string) (interface{}, error) {
 }
 
 func (p *MpvPlayer) sendCommand(cmd interface{}) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.conn == nil {
-		return fmt.Errorf("mpv not connected")
-	}
 	data, err := json.Marshal(cmd)
 	if err != nil {
 		return err
 	}
-	_, err = p.conn.Write(append(data, '\n'))
-	if err != nil {
-		p.conn.Close()
-		p.conn = nil
-		return fmt.Errorf("failed to send command to mpv: %w", err)
-	}
-	return nil
+	data = append(data, '\n')
+	log.Printf("[DEBUG] sendCommand: writing %d bytes", len(data))
+	return p.writeToPipe(data)
 }
 
 func (p *MpvPlayer) SetProperty(name string, value interface{}) error {

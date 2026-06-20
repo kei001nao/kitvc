@@ -170,16 +170,9 @@ type model struct {
 }
 
 func InitialModel(cfg *config.Config) model {
-	// Socket path for mpv IPC
 	socketPath := player.MpvSocketPath(os.Getpid())
 	p := player.NewMpvPlayer(socketPath, cfg.Player.MpvArgs)
 	vol := float64(cfg.Player.Volume)
-	if err := p.Start(); err != nil {
-		// We still create the model, but player will be disconnected
-		log.Printf("Warning: failed to start mpv: %v", err)
-	} else {
-		p.SetProperty("volume", vol)
-	}
 
 	return model{
 		config:      cfg,
@@ -207,6 +200,8 @@ func hideCursorCmd() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	log.Printf("[DEBUG] Update: type=%T", msg)
+
 	// Handle UI state loaded message
 	if msg, ok := msg.(uiStateLoadedMsg); ok {
 		m.sidebar.CollapseAll()
@@ -286,6 +281,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				db.DeleteEmptyAlbums()
 			}
+			m.sidebar.Refresh()
 			m.refreshActiveView()
 			if n := m.sidebar.SelectedNode(); n != nil {
 				if cmd := m.updateCoverForNode(n); cmd != nil {
@@ -325,6 +321,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case scanFinishedMsg:
 		log.Printf("[DEBUGLOG] scanFinishedMsg received: count=%d", msg.count)
 		m.setMessage(fmt.Sprintf("Scan finished: %d items found", msg.count))
+		m.sidebar.Refresh()
 		m.refreshActiveView()
 		// Update cover for current selection
 		if n := m.sidebar.SelectedNode(); n != nil {
@@ -770,6 +767,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Fall through: up/down navigate filtered list, space toggles playback, etc.
 			}
 		}
+		log.Printf("[DEBUG] keypress: %q", msg.String())
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if m.player != nil {
@@ -912,6 +910,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.scanPhase = "music"
 			return m, m.scanMusicCmd()
+		case "ctrl+r":
+			if m.scanning {
+				return m, nil
+			}
+			m.sidebar.Refresh()
+			m.refreshActiveView()
+			if n := m.sidebar.SelectedNode(); n != nil {
+				if cmd := m.updateCoverForNode(n); cmd != nil {
+					return m, cmd
+				}
+			}
+			m.setMessage("Refreshed")
+			return m, nil
 		case "enter":
 			if m.focusedSide {
 				m.focusedSide = false
@@ -1644,8 +1655,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.coverPlaceCmd(), m.syncPosterCmd(), m.syncVideoEditPosterCmd())
 		return m, tea.Batch(cmds...)
 	case tickMsg:
+		log.Printf("[DEBUG] tickMsg: start (IsRunning=%v)", m.player != nil && m.player.IsRunning())
 		if m.player != nil {
 			if !m.player.IsRunning() {
+				log.Printf("[DEBUG] tickMsg: player not running, clearing state")
 				if m.playbackPos > 0 && m.player.GetCurrentTrackPath() != "" {
 					db.UpdateVideoLastPos(m.player.GetCurrentTrackPath(), m.playbackPos)
 				}
@@ -1672,7 +1685,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if v, ok := val.(float64); ok {
 					m.volume = v
 				}
-
 				valPause, _ := m.player.GetProperty("pause")
 				isPaused := false
 				if p, ok := valPause.(bool); ok {
@@ -1691,6 +1703,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		}
+		log.Printf("[DEBUG] tickMsg: complete")
 		cmds = append(cmds, tick())
 	}
 
@@ -2942,6 +2955,7 @@ func (m *model) helpOverlayView(width int) string {
   Space       Pause/Resume
   /           Search current list
   s           Scan library
+  Ctrl+r      Refresh sidebar & list
   n           Create filter (sidebar, Views node)
   d           Delete item (playlist/track/filter)
   a           Add tracks to playlist
