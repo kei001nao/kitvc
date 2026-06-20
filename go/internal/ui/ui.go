@@ -169,6 +169,20 @@ type model struct {
 	posterVersion          uint64
 	videoEditPosterVersion uint64
 
+	lastCoverRow  int
+	lastCoverCols int
+	lastCoverRows int
+
+	lastPosterRow  int
+	lastPosterCol  int
+	lastPosterCols int
+	lastPosterRows int
+
+	lastVideoEditPosterRow  int
+	lastVideoEditPosterCol  int
+	lastVideoEditPosterCols int
+	lastVideoEditPosterRows int
+
 	tty ttyWriter
 
 	displayer imageDisplayer
@@ -2990,9 +3004,15 @@ func (m *model) refreshCurrentVideoView() {
 
 func (m *model) coverClearCmd() tea.Cmd {
 	clearImg := func() tea.Msg {
-		cols := m.sidebar.CoverCols()
-		rows := m.sidebar.CoverRows()
-		_ = m.displayer.Clear(m.tty, m.sidebar.CoverRow()+1, 1, cols, rows, 1)
+		cols := m.lastCoverCols
+		rows := m.lastCoverRows
+		row := m.lastCoverRow
+		if cols > 0 && rows > 0 {
+			_ = m.displayer.Clear(m.tty, row, 1, cols, rows, 1)
+		}
+		m.lastCoverRow = 0
+		m.lastCoverCols = 0
+		m.lastCoverRows = 0
 		m.tty.Sync()
 		return nil
 	}
@@ -3006,8 +3026,15 @@ func (m *model) coverDisplayCmd() tea.Cmd {
 	}
 	cols := m.sidebar.CoverCols()
 	rows := m.sidebar.CoverRows()
+	row := m.sidebar.CoverRow() + 1
 	return func() tea.Msg {
-		_ = m.displayer.Draw(m.tty, path, m.sidebar.CoverRow()+1, 1, cols, rows, 1)
+		if m.lastCoverCols > 0 && m.lastCoverRows > 0 {
+			_ = m.displayer.Clear(m.tty, m.lastCoverRow, 1, m.lastCoverCols, m.lastCoverRows, 1)
+		}
+		m.lastCoverRow = row
+		m.lastCoverCols = cols
+		m.lastCoverRows = rows
+		_ = m.displayer.Draw(m.tty, path, row, 1, cols, rows, 1)
 		m.tty.Sync()
 		return nil
 	}
@@ -3025,6 +3052,13 @@ func (m *model) syncPosterCmd() tea.Cmd {
 	kitty := m.videoFetch.CachedKitty()
 	return func() tea.Msg {
 		log.Printf("[DEBUGLOG] syncPosterCmd: start writing to TTY (ID=3) at row=%d col=%d len=%d", row+1, col+1, len(kitty))
+		if m.lastPosterCols > 0 && m.lastPosterRows > 0 {
+			_ = m.displayer.Clear(m.tty, m.lastPosterRow, m.lastPosterCol, m.lastPosterCols, m.lastPosterRows, 3)
+		}
+		m.lastPosterRow = row + 1
+		m.lastPosterCol = col + 1
+		m.lastPosterCols = w
+		m.lastPosterRows = h
 		_ = m.displayer.DrawCached(m.tty, kitty, row+1, col+1, w, h, 3)
 		m.tty.Sync()
 		log.Printf("[DEBUGLOG] syncPosterCmd: finished writing")
@@ -3040,6 +3074,13 @@ func (m *model) syncVideoEditPosterCmd() tea.Cmd {
 	kitty := m.videoEdit.CachedKitty()
 	return func() tea.Msg {
 		log.Printf("[DEBUGLOG] syncVideoEditPosterCmd: start writing to TTY (ID=2) at row=%d col=%d len=%d", row+1, col+1, len(kitty))
+		if m.lastVideoEditPosterCols > 0 && m.lastVideoEditPosterRows > 0 {
+			_ = m.displayer.Clear(m.tty, m.lastVideoEditPosterRow, m.lastVideoEditPosterCol, m.lastVideoEditPosterCols, m.lastVideoEditPosterRows, 2)
+		}
+		m.lastVideoEditPosterRow = row + 1
+		m.lastVideoEditPosterCol = col + 1
+		m.lastVideoEditPosterCols = w
+		m.lastVideoEditPosterRows = h
 		_ = m.displayer.DrawCached(m.tty, kitty, row+1, col+1, w, h, 2)
 		m.tty.Sync()
 		log.Printf("[DEBUGLOG] syncVideoEditPosterCmd: finished writing")
@@ -3064,12 +3105,18 @@ func (m *model) posterPos() (row, col, w, h int) {
 }
 
 func (m *model) posterClearCmd() tea.Cmd {
-	row, col, w, h := m.posterPos()
-	if w <= 0 || h <= 0 {
-		return nil
-	}
 	clearImg := func() tea.Msg {
-		_ = m.displayer.Clear(m.tty, row+1, col+1, w, h, 3)
+		row := m.lastPosterRow
+		col := m.lastPosterCol
+		w := m.lastPosterCols
+		h := m.lastPosterRows
+		if w > 0 && h > 0 {
+			_ = m.displayer.Clear(m.tty, row, col, w, h, 3)
+		}
+		m.lastPosterRow = 0
+		m.lastPosterCol = 0
+		m.lastPosterCols = 0
+		m.lastPosterRows = 0
 		m.tty.Sync()
 		return nil
 	}
@@ -3112,9 +3159,18 @@ func (m *model) posterDisplayCmd() tea.Cmd {
 }
 
 func (m *model) videoEditPosterClearCmd() tea.Cmd {
-	row, col, w, h := m.videoEditPosterPos()
 	clearImg := func() tea.Msg {
-		_ = m.displayer.Clear(m.tty, row+1, col+1, w, h, 2)
+		row := m.lastVideoEditPosterRow
+		col := m.lastVideoEditPosterCol
+		w := m.lastVideoEditPosterCols
+		h := m.lastVideoEditPosterRows
+		if w > 0 && h > 0 {
+			_ = m.displayer.Clear(m.tty, row, col, w, h, 2)
+		}
+		m.lastVideoEditPosterRow = 0
+		m.lastVideoEditPosterCol = 0
+		m.lastVideoEditPosterCols = 0
+		m.lastVideoEditPosterRows = 0
 		m.tty.Sync()
 		return nil
 	}
