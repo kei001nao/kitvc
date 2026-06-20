@@ -233,16 +233,16 @@ func (p *MpvPlayer) EnsureRunning() error {
 }
 
 func (p *MpvPlayer) Stop() {
+	if p.cmd != nil && p.cmd.Process != nil {
+		mpvKill(p.cmd)
+		p.cmd = nil
+	}
 	p.mu.Lock()
 	if p.conn != nil {
 		p.conn.Close()
 		p.conn = nil
 	}
 	p.mu.Unlock()
-	if p.cmd != nil && p.cmd.Process != nil {
-		mpvKill(p.cmd)
-		p.cmd = nil
-	}
 }
 
 func (p *MpvPlayer) LoadFile(path string) error {
@@ -311,6 +311,22 @@ func (p *MpvPlayer) GetProperty(name string) (interface{}, error) {
 		return nil, err
 	}
 
+	return p.getProperty(name)
+}
+
+func (p *MpvPlayer) TryGetProperty(name string) (interface{}, error) {
+	p.mu.Lock()
+	conn := p.conn
+	running := p.IsRunning()
+	p.mu.Unlock()
+	if conn == nil || !running {
+		return nil, fmt.Errorf("player not running")
+	}
+
+	return p.getProperty(name)
+}
+
+func (p *MpvPlayer) getProperty(name string) (interface{}, error) {
 	requestID := uint32(time.Now().UnixNano())
 	ch := make(chan interface{}, 1)
 

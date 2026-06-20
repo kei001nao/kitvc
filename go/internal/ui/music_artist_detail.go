@@ -134,7 +134,49 @@ func (mad musicArtistDetail) Update(msg tea.Msg) (musicArtistDetail, tea.Cmd) {
 	var cmd tea.Cmd
 
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		upperPageSize := mad.height / 3
+		if upperPageSize < 1 {
+			upperPageSize = 1
+		}
+		lowerPageSize := mad.height - (mad.height/3) - 6
+		if lowerPageSize < 1 {
+			lowerPageSize = 1
+		}
 		switch keyMsg.String() {
+		case "pgup":
+			if mad.focusedUpper {
+				cursor := mad.albumsTable.GetHighlightedRowIndex()
+				cursor -= upperPageSize
+				if cursor < 0 {
+					cursor = 0
+				}
+				mad.albumsTable = mad.albumsTable.WithHighlightedRow(cursor)
+			} else {
+				cursor := mad.tracksTable.GetHighlightedRowIndex()
+				cursor -= lowerPageSize
+				if cursor < 0 {
+					cursor = 0
+				}
+				mad.tracksTable = mad.tracksTable.WithHighlightedRow(cursor)
+			}
+			return mad, nil
+		case "pgdown":
+			if mad.focusedUpper {
+				cursor := mad.albumsTable.GetHighlightedRowIndex()
+				cursor += upperPageSize
+				if cursor >= len(mad.albums) {
+					cursor = len(mad.albums) - 1
+				}
+				mad.albumsTable = mad.albumsTable.WithHighlightedRow(cursor)
+			} else {
+				cursor := mad.tracksTable.GetHighlightedRowIndex()
+				cursor += lowerPageSize
+				if cursor >= len(mad.tracks) {
+					cursor = len(mad.tracks) - 1
+				}
+				mad.tracksTable = mad.tracksTable.WithHighlightedRow(cursor)
+			}
+			return mad, nil
 		case "enter":
 			if mad.focusedUpper {
 				mad.focusedUpper = false

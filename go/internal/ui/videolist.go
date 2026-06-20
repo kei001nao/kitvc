@@ -29,6 +29,7 @@ type videoList struct {
 	table  table.Model
 	videos []db.VideoData
 	marked map[int]bool
+	height int
 }
 
 func newVideoList(width, height int) videoList {
@@ -37,7 +38,7 @@ func newVideoList(width, height int) videoList {
 }
 
 func newVideoListFromVideos(width, height int, videos []db.VideoData) videoList {
-	tl := videoList{videos: videos, marked: make(map[int]bool)}
+	tl := videoList{videos: videos, marked: make(map[int]bool), height: height}
 	tl.table = tl.buildTable(width, height, videos)
 	return tl
 }
@@ -140,6 +141,30 @@ func (vl videoList) videoRow(v db.VideoData, mark string, w map[string]int) tabl
 }
 
 func (vl videoList) Update(msg tea.Msg) (videoList, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		pageSize := vl.height - 4
+		if pageSize < 1 {
+			pageSize = 1
+		}
+		switch keyMsg.String() {
+		case "pgup":
+			cursor := vl.table.GetHighlightedRowIndex()
+			cursor -= pageSize
+			if cursor < 0 {
+				cursor = 0
+			}
+			vl.table = vl.table.WithHighlightedRow(cursor)
+			return vl, nil
+		case "pgdown":
+			cursor := vl.table.GetHighlightedRowIndex()
+			cursor += pageSize
+			if cursor >= len(vl.videos) {
+				cursor = len(vl.videos) - 1
+			}
+			vl.table = vl.table.WithHighlightedRow(cursor)
+			return vl, nil
+		}
+	}
 	var cmd tea.Cmd
 	vl.table, cmd = vl.table.Update(msg)
 	return vl, cmd
@@ -153,8 +178,9 @@ func (vl *videoList) SetSize(w, h int) {
 	if w <= 0 {
 		w = 1
 	}
+	vl.height = h
 	cols, colWidths := vl.buildColumns(w)
-	
+
 	currentRows := vl.table.GetVisibleRows()
 	rows := make([]table.Row, len(vl.videos))
 	for i, v := range vl.videos {

@@ -100,15 +100,34 @@ func mpvKill(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	cmd.Process.Kill()
+	pid := cmd.Process.Pid
+	log.Printf("[DEBUG] mpvKill: killing mpv pid=%d", pid)
+
+	// Always use taskkill first on Windows (more reliable than TerminateProcess)
+	taskkill := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", pid))
+	killOutput, err := taskkill.CombinedOutput()
+	if err != nil {
+		log.Printf("[DEBUG] mpvKill: taskkill failed: %v, output: %s", err, string(killOutput))
+		// Fall back to Go's Kill()
+		if err := cmd.Process.Kill(); err != nil {
+			log.Printf("[DEBUG] mpvKill: Kill also failed: %v", err)
+		}
+	} else {
+		log.Printf("[DEBUG] mpvKill: taskkill succeeded: %s", string(killOutput))
+	}
+
 	done := make(chan struct{})
 	go func() {
-		cmd.Wait()
+		if err := cmd.Wait(); err != nil {
+			log.Printf("[DEBUG] mpvKill: Wait returned error: %v", err)
+		}
 		close(done)
 	}()
 	select {
 	case <-done:
+		log.Printf("[DEBUG] mpvKill: process exited")
 	case <-time.After(3 * time.Second):
+		log.Printf("[DEBUG] mpvKill: timeout waiting for process exit, pid=%d may still be running", pid)
 	}
 }
 
@@ -133,7 +152,13 @@ func (p *MpvPlayer) ipcLoop() {
 			if int(avail) < n {
 				n = int(avail)
 			}
-			n, err := p.conn.Read(rdBuf[:n])
+			p.mu.Lock()
+			conn := p.conn
+			p.mu.Unlock()
+			if conn == nil {
+				continue
+			}
+			n, err := conn.Read(rdBuf[:n])
 			if err != nil {
 				log.Printf("[DEBUG] ipcLoop: read error: %v", err)
 				return
@@ -146,7 +171,16 @@ func (p *MpvPlayer) ipcLoop() {
 
 		select {
 		case req := <-p.cmdCh:
-			_, err := p.conn.Write(req.data)
+			p.mu.Lock()
+			conn := p.conn
+			p.mu.Unlock()
+			if conn == nil {
+				if req.result != nil {
+					req.result <- fmt.Errorf("mpv not connected")
+				}
+				continue
+			}
+			_, err := conn.Write(req.data)
 			log.Printf("[DEBUG] ipcLoop: write done err=%v", err)
 			if req.result != nil {
 				if err != nil {

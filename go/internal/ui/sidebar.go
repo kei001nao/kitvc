@@ -38,6 +38,7 @@ type sidebar struct {
 	nodes       []*node
 	visibleRows []*node
 	cursor      int
+	scrollOffset int
 	width       int
 	height      int
 	cover       coverArt
@@ -47,6 +48,7 @@ func newSidebar(width, height int) sidebar {
 	s := sidebar{
 		width:  width,
 		height: height,
+		scrollOffset: 0,
 	}
 
 	// 1. Music Library Node
@@ -243,6 +245,9 @@ func (s *sidebar) Refresh() {
 	}
 
 	s.rebuildVisible()
+	if s.scrollOffset >= len(s.visibleRows) {
+		s.scrollOffset = 0
+	}
 }
 
 func (s *sidebar) CollapseAll() {
@@ -356,6 +361,25 @@ func (s *sidebar) HasCover() bool {
 	return s.cover.cached && s.cover.art != ""
 }
 
+func (s *sidebar) ensureVisible() {
+	maxOffset := len(s.visibleRows) - s.height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if s.cursor < s.scrollOffset {
+		s.scrollOffset = s.cursor
+	}
+	if s.cursor >= s.scrollOffset+s.height {
+		s.scrollOffset = s.cursor - s.height + 1
+	}
+	if s.scrollOffset > maxOffset {
+		s.scrollOffset = maxOffset
+	}
+	if s.scrollOffset < 0 {
+		s.scrollOffset = 0
+	}
+}
+
 func (s sidebar) Update(msg tea.Msg) (sidebar, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -364,10 +388,24 @@ func (s sidebar) Update(msg tea.Msg) (sidebar, tea.Cmd) {
 			if s.cursor > 0 {
 				s.cursor--
 			}
+			s.ensureVisible()
 		case "down":
 			if s.cursor < len(s.visibleRows)-1 {
 				s.cursor++
 			}
+			s.ensureVisible()
+		case "pgup":
+			s.cursor -= s.height
+			if s.cursor < 0 {
+				s.cursor = 0
+			}
+			s.ensureVisible()
+		case "pgdown":
+			s.cursor += s.height
+			if s.cursor >= len(s.visibleRows) {
+				s.cursor = len(s.visibleRows) - 1
+			}
+			s.ensureVisible()
 		case "right":
 			if n := s.SelectedNode(); n != nil && len(n.children) > 0 {
 				if !n.expanded {
@@ -395,10 +433,33 @@ func (s *sidebar) SetSize(width, height int) {
 }
 
 func (s sidebar) View(focused bool) string {
+	treeAvail := s.height
+	var coverStr string
+	coverLines := 0
+	if s.cover.cached && s.cover.art != "" {
+		coverStr = s.cover.art
+		coverLines = s.cover.rows
+		treeAvail -= coverLines
+		if treeAvail < 0 {
+			treeAvail = 0
+		}
+	}
+
+	start := s.scrollOffset
+	end := start + treeAvail
+	if end > len(s.visibleRows) {
+		end = len(s.visibleRows)
+	}
+	if start > end {
+		start = end
+	}
+
 	var tree strings.Builder
-	for i, n := range s.visibleRows {
+	for i := start; i < end; i++ {
+		n := s.visibleRows[i]
+
 		indent := strings.Repeat("  ", n.level)
-		
+
 		prefix := ""
 		if len(n.children) > 0 {
 			if n.expanded {
@@ -418,24 +479,17 @@ func (s sidebar) View(focused bool) string {
 		if availWidth > 0 && len(line) > availWidth {
 			line = line[:availWidth]
 		}
-		
+
 		tree.WriteString(style.Render(line))
-		if i < len(s.visibleRows)-1 {
+		if i < end-1 {
 			tree.WriteString("\n")
 		}
 	}
 	treeStr := tree.String()
-	treeLines := len(s.visibleRows)
+	shownLines := end - start
 
-	var coverStr string
-	coverLines := 0
-	if s.cover.cached && s.cover.art != "" {
-		coverStr = s.cover.art
-		coverLines = s.cover.rows
-	}
-
-	// Push cover to bottom of sidebar area
-	padding := s.height - treeLines - coverLines + 1
+	// Push remaining content down so cover sits at bottom
+	padding := treeAvail - shownLines
 	if padding < 0 {
 		padding = 0
 	}
@@ -450,7 +504,6 @@ func (s sidebar) View(focused bool) string {
 	}
 
 	contentStr := content.String()
-	// Truncate to s.height lines to prevent layout expansion
 	lines := strings.Split(contentStr, "\n")
 	if len(lines) > s.height {
 		lines = lines[:s.height]
@@ -461,6 +514,6 @@ func (s sidebar) View(focused bool) string {
 		Width(s.width).
 		Height(s.height).
 		UnsetBackground()
-	
+
 	return sidebarStyle.Render(contentStr)
 }

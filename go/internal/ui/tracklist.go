@@ -88,6 +88,7 @@ type trackList struct {
 	table  table.Model
 	tracks []db.TrackData
 	marked map[int]bool
+	height int
 }
 
 func newTrackList(width, height int, artist, albumTitle string) trackList {
@@ -96,7 +97,7 @@ func newTrackList(width, height int, artist, albumTitle string) trackList {
 }
 
 func newTrackListFromTracks(width, height int, tracks []db.TrackData) trackList {
-	tl := trackList{tracks: tracks, marked: make(map[int]bool)}
+	tl := trackList{tracks: tracks, marked: make(map[int]bool), height: height}
 	tl.table = tl.buildTable(width, height, tracks)
 	return tl
 }
@@ -170,6 +171,30 @@ func (tl trackList) buildColumns(width int) []table.Column {
 }
 
 func (tl trackList) Update(msg tea.Msg) (trackList, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		pageSize := tl.height - 4
+		if pageSize < 1 {
+			pageSize = 1
+		}
+		switch keyMsg.String() {
+		case "pgup":
+			cursor := tl.table.GetHighlightedRowIndex()
+			cursor -= pageSize
+			if cursor < 0 {
+				cursor = 0
+			}
+			tl.table = tl.table.WithHighlightedRow(cursor)
+			return tl, nil
+		case "pgdown":
+			cursor := tl.table.GetHighlightedRowIndex()
+			cursor += pageSize
+			if cursor >= len(tl.tracks) {
+				cursor = len(tl.tracks) - 1
+			}
+			tl.table = tl.table.WithHighlightedRow(cursor)
+			return tl, nil
+		}
+	}
 	var cmd tea.Cmd
 	tl.table, cmd = tl.table.Update(msg)
 	return tl, cmd
@@ -183,6 +208,7 @@ func (tl *trackList) SetSize(w, h int) {
 	if w <= 0 {
 		w = 1
 	}
+	tl.height = h
 	cols := tl.buildColumns(w)
 	tl.table = tl.table.
 		WithColumns(cols).

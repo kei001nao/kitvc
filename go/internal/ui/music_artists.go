@@ -11,7 +11,8 @@ const (
 )
 
 type musicArtists struct {
-	table table.Model
+	table  table.Model
+	height int
 }
 
 func newMusicArtists(width, height int, artists []string) musicArtists {
@@ -46,10 +47,35 @@ func newMusicArtists(width, height int, artists []string) musicArtists {
 		WithBorderForeground(lipgloss.Color("240")).
 		Border(emptyBorder)
 
-	return musicArtists{table: t}
+	return musicArtists{table: t, height: height}
 }
 
 func (ma musicArtists) Update(msg tea.Msg) (musicArtists, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		pageSize := ma.height - 4
+		if pageSize < 1 {
+			pageSize = 1
+		}
+		total := len(ma.table.GetVisibleRows())
+		switch keyMsg.String() {
+		case "pgup":
+			cursor := ma.table.GetHighlightedRowIndex()
+			cursor -= pageSize
+			if cursor < 0 {
+				cursor = 0
+			}
+			ma.table = ma.table.WithHighlightedRow(cursor)
+			return ma, nil
+		case "pgdown":
+			cursor := ma.table.GetHighlightedRowIndex()
+			cursor += pageSize
+			if cursor >= total {
+				cursor = total - 1
+			}
+			ma.table = ma.table.WithHighlightedRow(cursor)
+			return ma, nil
+		}
+	}
 	var cmd tea.Cmd
 	ma.table, cmd = ma.table.Update(msg)
 	return ma, cmd
@@ -63,6 +89,7 @@ func (ma *musicArtists) SetSize(w, h int) {
 	if w <= 0 {
 		w = 1
 	}
+	ma.height = h
 	ma.table = ma.table.
 		WithMaxTotalWidth(w).
 		WithTargetHeight(h - 4)

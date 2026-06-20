@@ -154,7 +154,6 @@ type model struct {
 	// Help overlay
 	helpOverlay string
 
-	// Global search: saved view to restore on exit
 	savedView viewState
 	scanPhase         string
 	messageTime       time.Time
@@ -164,9 +163,15 @@ type model struct {
 	tmdbBatchTotal    int
 	tmdbBatchCancelled bool
 
+	playerStateInProgress bool
+
 	tty ttyWriter
 
 	displayer imageDisplayer
+}
+
+func (m model) Player() *player.MpvPlayer {
+	return m.player
 }
 
 func InitialModel(cfg *config.Config) model {
@@ -1668,36 +1673,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.playbackPos = 0
 				m.duration = 0
 				m.currentTrack = ""
-			} else {
-				completedPath := m.player.ConsumeCompletedPath()
-				if completedPath != "" {
-					db.ClearVideoLastPos(completedPath)
-				}
-				val, _ := m.player.GetProperty("time-pos")
-				if pos, ok := val.(float64); ok {
-					m.playbackPos = pos
-				}
-				val, _ = m.player.GetProperty("duration")
-				if dur, ok := val.(float64); ok {
-					m.duration = dur
-				}
-				val, _ = m.player.GetProperty("volume")
-				if v, ok := val.(float64); ok {
-					m.volume = v
-				}
-				valPause, _ := m.player.GetProperty("pause")
-				isPaused := false
-				if p, ok := valPause.(bool); ok {
-					isPaused = p
-				}
-				currentPath := m.player.GetCurrentTrackPath()
-				m.trackList.UpdatePlaybackStatus(currentPath, isPaused)
-				m.artistDetail.UpdatePlaybackStatus(currentPath, isPaused)
-				m.videoList.UpdatePlaybackStatus(currentPath, isPaused)
-
-				if currentPath != "" && m.playbackPos > 0 {
-					db.UpdateVideoLastPos(currentPath, m.playbackPos)
-				}
+			} else if !m.playerStateInProgress {
+				m.playerStateInProgress = true
+				cmds = append(cmds, fetchPlayerStateCmd(m.player))
 			}
 			if cmd := m.setCoverFromPlaying(); cmd != nil {
 				cmds = append(cmds, cmd)
@@ -1705,6 +1683,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		log.Printf("[DEBUG] tickMsg: complete")
 		cmds = append(cmds, tick())
+	case playerStateMsg:
+		m.playerStateInProgress = false
+		if m.player == nil {
+			break
+		}
+		if msg.completedPath != "" {
+			db.ClearVideoLastPos(msg.completedPath)
+		}
+		m.playbackPos = msg.timePos
+		m.duration = msg.duration
+		m.volume = msg.volume
+		m.trackList.UpdatePlaybackStatus(msg.currentPath, msg.isPaused)
+		m.artistDetail.UpdatePlaybackStatus(msg.currentPath, msg.isPaused)
+		m.videoList.UpdatePlaybackStatus(msg.currentPath, msg.isPaused)
+		if msg.currentPath != "" && msg.timePos > 0 {
+			db.UpdateVideoLastPos(msg.currentPath, msg.timePos)
+		}
+		if cmd := m.setCoverFromPlaying(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	if m.focusedSide {
@@ -2757,7 +2755,7 @@ func (m *model) enterSearch() {
 	m.searchQuery = ""
 	m.savedView = -1
 	switch m.activeView {
-	case viewMusicArtists, viewMusicArtistDetail:
+	case viewMusicArtists:
 		tracks, err := db.GetMusicTracks("", "")
 		if err == nil && len(tracks) > 0 {
 			m.searchOrigTracks = make([]db.TrackData, len(tracks))
@@ -2775,13 +2773,18 @@ func (m *model) enterSearch() {
 			}
 			m.trackList = newTrackListFromTracks(mainWidth, middleHeight, m.searchOrigTracks)
 			m.syncFocus()
+		} else {
+			m.searchMode = false
 		}
-	case viewMusicLibrary, viewMusicRecent, viewMusicFilter:
-		m.searchOrigTracks = make([]db.TrackData, len(m.trackList.tracks))
-		copy(m.searchOrigTracks, m.trackList.tracks)
-	case viewVideoLibrary, viewVideoContinue, viewVideoRecent, viewVideoFilter, viewVideoHealth:
+	case viewVideoLibrary:
+		if len(m.videoList.videos) == 0 {
+			m.searchMode = false
+			return
+		}
 		m.searchOrigVideos = make([]db.VideoData, len(m.videoList.videos))
 		copy(m.searchOrigVideos, m.videoList.videos)
+	default:
+		m.searchMode = false
 	}
 }
 
@@ -2818,25 +2821,20 @@ func (m *model) exitSearch() {
 func (m *model) applySearchFilter() {
 	q := strings.ToLower(m.searchQuery)
 	if q == "" {
-		if m.savedView >= 0 {
-			m.activeView = m.savedView
-			m.syncFocus()
-		} else {
-			sbWidth := m.getSidebarWidth()
-			mainWidth := m.width - sbWidth - 2
-			if mainWidth < 1 {
-				mainWidth = 1
-			}
-			middleHeight := m.height - 6
-			if middleHeight < 1 {
-				middleHeight = 1
-			}
-			if len(m.searchOrigTracks) > 0 {
-				m.trackList = newTrackListFromTracks(mainWidth, middleHeight, m.searchOrigTracks)
-			}
-			if len(m.searchOrigVideos) > 0 {
-				m.videoList = newVideoListFromVideos(mainWidth, middleHeight, m.searchOrigVideos)
-			}
+		sbWidth := m.getSidebarWidth()
+		mainWidth := m.width - sbWidth - 2
+		if mainWidth < 1 {
+			mainWidth = 1
+		}
+		middleHeight := m.height - 6
+		if middleHeight < 1 {
+			middleHeight = 1
+		}
+		if len(m.searchOrigTracks) > 0 {
+			m.trackList = newTrackListFromTracks(mainWidth, middleHeight, m.searchOrigTracks)
+		}
+		if len(m.searchOrigVideos) > 0 {
+			m.videoList = newVideoListFromVideos(mainWidth, middleHeight, m.searchOrigVideos)
 		}
 		return
 	}
@@ -2850,10 +2848,6 @@ func (m *model) applySearchFilter() {
 		middleHeight = 1
 	}
 	if len(m.searchOrigTracks) > 0 {
-		if m.savedView >= 0 && m.activeView != viewMusicLibrary {
-			m.activeView = viewMusicLibrary
-			m.syncFocus()
-		}
 		var filtered []db.TrackData
 		for _, t := range m.searchOrigTracks {
 			if strings.Contains(strings.ToLower(t.Title), q) ||
@@ -2948,6 +2942,7 @@ func (m *model) helpOverlayView(width int) string {
   q / Ctrl+C  Quit
   Tab         Toggle sidebar/content focus
   ↑/↓         Navigate list/tree
+  PgUp/PgDn   Scroll page up/down
   →/←         Expand/collapse tree node
   ←/→         Seek -5/+5 sec (content focused)
   H/L         Seek -10/+10 sec
@@ -3206,6 +3201,41 @@ func tick() tea.Cmd {
 	return tea.Every(250*time.Millisecond, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
+}
+
+type playerStateMsg struct {
+	timePos       float64
+	duration      float64
+	volume        float64
+	isPaused      bool
+	currentPath   string
+	completedPath string
+}
+
+func fetchPlayerStateCmd(p *player.MpvPlayer) tea.Cmd {
+	return func() tea.Msg {
+		completedPath := p.ConsumeCompletedPath()
+
+		msg := playerStateMsg{
+			completedPath: completedPath,
+		}
+
+		if val, err := p.TryGetProperty("time-pos"); err == nil {
+			msg.timePos, _ = val.(float64)
+		}
+		if val, err := p.TryGetProperty("duration"); err == nil {
+			msg.duration, _ = val.(float64)
+		}
+		if val, err := p.TryGetProperty("volume"); err == nil {
+			msg.volume, _ = val.(float64)
+		}
+		if valPause, err := p.TryGetProperty("pause"); err == nil {
+			msg.isPaused, _ = valPause.(bool)
+		}
+		msg.currentPath = p.GetCurrentTrackPath()
+
+		return msg
+	}
 }
 
 type uiStateLoadedMsg struct {

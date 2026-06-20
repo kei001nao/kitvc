@@ -48,6 +48,12 @@ func main() {
 	log.Printf("[DEBUG] main: model created, starting bubbletea")
 
 	p := tea.NewProgram(m)
+	defer func() {
+		if pl := m.Player(); pl != nil {
+			pl.Stop()
+			log.Printf("[DEBUG] main: player stopped on exit")
+		}
+	}()
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Alas, there's been an error: %v", err)
 		os.Exit(1)
