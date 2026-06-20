@@ -3,7 +3,7 @@
 package player
 
 import (
-	"bufio"
+	"bytes"
 	"fmt"
 	"log"
 	"net"
@@ -119,51 +119,66 @@ func (p *MpvPlayer) startIPC() {
 
 func (p *MpvPlayer) ipcLoop() {
 	log.Printf("[DEBUG] MpvPlayer.ipcLoop: started")
-	r := bufio.NewReader(p.conn)
+	rdBuf := make([]byte, 4096)
+	var pending []byte
 	for {
+		lines := processPending(&pending)
+		for _, line := range lines {
+			p.processLine(line)
+		}
+
 		avail := peekPipeData(p.conn)
 		if avail > 0 {
-			line, err := r.ReadBytes('\n')
+			n := len(rdBuf)
+			if int(avail) < n {
+				n = int(avail)
+			}
+			n, err := p.conn.Read(rdBuf[:n])
 			if err != nil {
-				log.Printf("[DEBUG] ipcLoop: ReadBytes error: %v", err)
+				log.Printf("[DEBUG] ipcLoop: read error: %v", err)
 				return
 			}
-			p.processLine(line)
-			continue
+			if n > 0 {
+				pending = append(pending, rdBuf[:n]...)
+				continue
+			}
 		}
 
 		select {
 		case req := <-p.cmdCh:
 			_, err := p.conn.Write(req.data)
+			log.Printf("[DEBUG] ipcLoop: write done err=%v", err)
+			if req.result != nil {
+				if err != nil {
+					req.result <- err
+				} else {
+					req.result <- nil
+				}
+			}
 			if err != nil {
 				log.Printf("[DEBUG] ipcLoop: write error: %v", err)
 				p.mu.Lock()
 				p.conn.Close()
 				p.conn = nil
 				p.mu.Unlock()
-				req.result <- err
 				return
 			}
-			p.drainResponses(r)
-			req.result <- nil
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
 }
 
-func (p *MpvPlayer) drainResponses(r *bufio.Reader) {
-	for i := 0; i < 200; i++ {
-		avail := peekPipeData(p.conn)
-		if avail == 0 {
-			return
+func processPending(pending *[]byte) [][]byte {
+	var lines [][]byte
+	for {
+		idx := bytes.IndexByte(*pending, '\n')
+		if idx < 0 {
+			break
 		}
-		line, err := r.ReadBytes('\n')
-		if err != nil {
-			log.Printf("[DEBUG] ipcLoop: drain error: %v", err)
-			return
-		}
-		p.processLine(line)
+		lines = append(lines, (*pending)[:idx])
+		*pending = (*pending)[idx+1:]
 	}
+	return lines
 }
 
 func peekPipeData(conn net.Conn) uint32 {

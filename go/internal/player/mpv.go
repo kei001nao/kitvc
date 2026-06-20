@@ -144,7 +144,7 @@ func (p *MpvPlayer) handleEvent(event map[string]interface{}) {
 		if p.currentIdx >= 0 && p.currentIdx+1 < len(p.queue) {
 			nextPath := p.queue[p.currentIdx+1]
 			p.mu.Unlock()
-			p.sendCommand(map[string]interface{}{
+			p.sendCommandAsync(map[string]interface{}{
 				"command": []interface{}{"loadfile", nextPath, "append"},
 			})
 		} else {
@@ -351,6 +351,20 @@ func (p *MpvPlayer) sendCommand(cmd interface{}) error {
 	data = append(data, '\n')
 	log.Printf("[DEBUG] sendCommand: writing %d bytes", len(data))
 	return p.writeToPipe(data)
+}
+
+func (p *MpvPlayer) sendCommandAsync(cmd interface{}) {
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return
+	}
+	data = append(data, '\n')
+	log.Printf("[DEBUG] sendCommandAsync: writing %d bytes", len(data))
+	select {
+	case p.cmdCh <- cmdRequest{data: data, result: nil}:
+	default:
+		log.Printf("[DEBUG] sendCommandAsync: cmdCh full, dropping command")
+	}
 }
 
 func (p *MpvPlayer) SetProperty(name string, value interface{}) error {
