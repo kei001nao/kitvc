@@ -643,3 +643,18 @@ func (m *sortFieldSelectModal) View() string {
 		BorderForeground(lipgloss.Color("62")).
 		Render(content)
 }
+
+func (m *filterEditModal) IsInputFocused() bool {
+	if m == nil {
+		return false
+	}
+	return m.focusedSection == 0
+}
+
+func (m *filterConditionModal) IsInputFocused() bool {
+	if m == nil {
+		return false
+	}
+	return m.focusedSection == 2
+}
+

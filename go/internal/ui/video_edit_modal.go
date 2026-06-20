@@ -477,3 +477,15 @@ func (m *videoEditModal) Values() []string {
 func (m *videoEditModal) Active() bool {
 	return m != nil && !m.submitted && !m.cancelled
 }
+
+func (m *videoEditModal) IsInputFocused() bool {
+	if m == nil {
+		return false
+	}
+	if m.focusIndex >= 0 && m.focusIndex < len(m.fields) {
+		f := m.fields[m.focusIndex]
+		return f.Kind == videoFieldInput || f.Kind == videoFieldTextArea
+	}
+	return false
+}
+

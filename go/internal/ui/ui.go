@@ -748,6 +748,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setMessage(string(msg))
 		return m, nil
 	case tea.KeyMsg:
+		// Check global toggle key "i" first if no text input has focus
+		if msg.String() == "i" && !m.isTextInputFocused() {
+			m.hideImages = !m.hideImages
+			m.sidebar.SetHideImages(m.hideImages)
+			if m.hideImages {
+				m.setMessage("Images hidden")
+				return m, tea.Batch(
+					m.coverClearCmd(),
+					m.posterClearCmd(),
+					m.videoEditPosterClearCmd(),
+				)
+			} else {
+				m.setMessage("Images shown")
+				var cmds []tea.Cmd
+				if cmd := m.coverDisplayCmd(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				if cmd := m.syncPosterCmd(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				if cmd := m.syncVideoEditPosterCmd(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return m, tea.Batch(cmds...)
+			}
+		}
+
 		// Help overlay dismiss
 		if m.helpOverlay != "" {
 			m.helpOverlay = ""
@@ -921,30 +948,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
-		case "i":
-			m.hideImages = !m.hideImages
-			m.sidebar.SetHideImages(m.hideImages)
-			if m.hideImages {
-				m.setMessage("Images hidden")
-				return m, tea.Batch(
-					m.coverClearCmd(),
-					m.posterClearCmd(),
-					m.videoEditPosterClearCmd(),
-				)
-			} else {
-				m.setMessage("Images shown")
-				var cmds []tea.Cmd
-				if cmd := m.coverDisplayCmd(); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-				if cmd := m.syncPosterCmd(); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-				if cmd := m.syncVideoEditPosterCmd(); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-				return m, tea.Batch(cmds...)
-			}
 		case "f1":
 			m.helpOverlay = m.helpOverlayView(m.width)
 			return m, nil
@@ -2733,6 +2736,30 @@ func (m model) handleVideoEditSubmit(values []string) model {
 	return m
 }
 
+func (m model) isTextInputFocused() bool {
+	if m.searchMode {
+		return true
+	}
+	if m.modal != nil {
+		if m.modal.kind == modalTextInput || m.modal.kind == modalForm {
+			return true
+		}
+	}
+	if m.videoFetch != nil && m.videoFetch.IsQueryFocused() {
+		return true
+	}
+	if m.videoEdit != nil && m.videoEdit.IsInputFocused() {
+		return true
+	}
+	if m.filterEdit != nil && m.filterEdit.IsInputFocused() {
+		return true
+	}
+	if m.filterCondEdit != nil && m.filterCondEdit.IsInputFocused() {
+		return true
+	}
+	return false
+}
+
 func (m *model) saveUIState() {
 	state := config.UIState{
 		ExpandedNodes: m.sidebar.GetExpandedNodeIDs(),
@@ -3165,6 +3192,9 @@ type posterReadyMsg struct {
 }
 
 func (m *model) posterDisplayCmd() tea.Cmd {
+	if m.hideImages {
+		return m.posterClearCmd()
+	}
 	if m.videoFetch == nil || m.videoFetch.PosterPath() == "" {
 		return nil
 	}
@@ -3236,6 +3266,9 @@ func (m *model) videoEditPosterPos() (row, col, w, h int) {
 }
 
 func (m *model) videoEditPosterDisplayCmd() tea.Cmd {
+	if m.hideImages {
+		return m.videoEditPosterClearCmd()
+	}
 	if m.videoEdit == nil || m.videoEdit.PosterPath() == "" {
 		return nil
 	}
