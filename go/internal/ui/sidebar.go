@@ -42,6 +42,7 @@ type sidebar struct {
 	width       int
 	height      int
 	cover       coverArt
+	hideImages  bool
 }
 
 func newSidebar(width, height int) sidebar {
@@ -357,8 +358,12 @@ func (s *sidebar) CoverRows() int {
 	return s.cover.rows
 }
 
+func (s *sidebar) SetHideImages(hide bool) {
+	s.hideImages = hide
+}
+
 func (s *sidebar) HasCover() bool {
-	return s.cover.cached && s.cover.art != ""
+	return !s.hideImages && s.cover.cached && s.cover.art != ""
 }
 
 func (s *sidebar) ensureVisible() {
@@ -436,7 +441,7 @@ func (s sidebar) View(focused bool) string {
 	treeAvail := s.height
 	var coverStr string
 	coverLines := 0
-	if s.cover.cached && s.cover.art != "" {
+	if !s.hideImages && s.cover.cached && s.cover.art != "" {
 		coverStr = s.cover.art
 		coverLines = s.cover.rows
 		treeAvail -= coverLines

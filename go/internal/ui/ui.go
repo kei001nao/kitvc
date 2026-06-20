@@ -183,6 +183,8 @@ type model struct {
 	lastVideoEditPosterCols int
 	lastVideoEditPosterRows int
 
+	hideImages bool
+
 	tty ttyWriter
 
 	displayer imageDisplayer
@@ -919,6 +921,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case "i":
+			m.hideImages = !m.hideImages
+			m.sidebar.SetHideImages(m.hideImages)
+			if m.hideImages {
+				m.setMessage("Images hidden")
+				return m, tea.Batch(
+					m.coverClearCmd(),
+					m.posterClearCmd(),
+					m.videoEditPosterClearCmd(),
+				)
+			} else {
+				m.setMessage("Images shown")
+				var cmds []tea.Cmd
+				if cmd := m.coverDisplayCmd(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				if cmd := m.syncPosterCmd(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				if cmd := m.syncVideoEditPosterCmd(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return m, tea.Batch(cmds...)
+			}
 		case "f1":
 			m.helpOverlay = m.helpOverlayView(m.width)
 			return m, nil
@@ -2967,6 +2993,7 @@ func (m *model) helpOverlayView(width int) string {
   Enter       Play selected
   Space       Pause/Resume
   /           Search current list
+  i           Toggle image display (cover/poster)
   s           Scan library
   Ctrl+r      Refresh sidebar & list
   n           Create filter (sidebar, Views node)
@@ -3020,6 +3047,9 @@ func (m *model) coverClearCmd() tea.Cmd {
 }
 
 func (m *model) coverDisplayCmd() tea.Cmd {
+	if m.hideImages {
+		return m.coverClearCmd()
+	}
 	path := m.sidebar.CoverPath()
 	if path == "" || !m.sidebar.HasCover() {
 		return m.coverClearCmd()
@@ -3045,6 +3075,9 @@ func (m *model) coverPlaceCmd() tea.Cmd {
 }
 
 func (m *model) syncPosterCmd() tea.Cmd {
+	if m.hideImages {
+		return m.posterClearCmd()
+	}
 	if m.videoFetch == nil || m.videoFetch.CachedKitty() == "" {
 		return nil
 	}
@@ -3067,6 +3100,9 @@ func (m *model) syncPosterCmd() tea.Cmd {
 }
 
 func (m *model) syncVideoEditPosterCmd() tea.Cmd {
+	if m.hideImages {
+		return m.videoEditPosterClearCmd()
+	}
 	if m.videoEdit == nil || m.videoEdit.CachedKitty() == "" {
 		return nil
 	}
