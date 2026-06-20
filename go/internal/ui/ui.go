@@ -2985,19 +2985,26 @@ func (m *model) refreshCurrentVideoView() {
 }
 
 func (m *model) coverClearCmd() tea.Cmd {
-	return func() tea.Msg {
+	clearImg := func() tea.Msg {
 		m.tty.WriteString("\x1b_Ga=d,i=1\x1b\\")
+		cols := m.sidebar.CoverCols()
+		rows := m.sidebar.CoverRows()
+		startRow := m.sidebar.CoverRow() + 1
+		for i := 0; i < rows; i++ {
+			fmt.Fprintf(m.tty, "\x1b[%d;1H%s", startRow+i, strings.Repeat(" ", cols))
+		}
 		m.tty.Sync()
 		return nil
 	}
+	return tea.Batch(clearImg, tea.ClearScreen)
 }
 
 func (m *model) writeImageToTTY(data string, startRow, startCol int) {
-	if strings.HasPrefix(data, "\x1b_G") || strings.HasPrefix(data, "\x1bP") {
+	if strings.Contains(data, "\x1b_G") || strings.Contains(data, "\x1bP") {
 		// Kitty protocol (\x1b_G) or Sixel protocol (\x1bP)
 		fmt.Fprintf(m.tty, "\x1b[%d;%dH", startRow, startCol)
 		m.tty.WriteString(data)
-		if strings.HasPrefix(data, "\x1bP") {
+		if strings.Contains(data, "\x1bP") {
 			// Sixel protocol: Reset character attributes and palette to default terminal colors after rendering
 			m.tty.WriteString("\x1b[0m\x1b]104\x1b\\")
 		}
@@ -3108,16 +3115,20 @@ func (m *model) posterClearCmd() tea.Cmd {
 	if w <= 0 || h <= 0 {
 		return nil
 	}
-	return func() tea.Msg {
+	clearImg := func() tea.Msg {
 		m.tty.WriteString("\x1b[?25l")
 		m.tty.WriteString("\x1b[s")
-		fmt.Fprintf(m.tty, "\x1b[%d;%dH", row+1, col+1)
 		m.tty.WriteString("\x1b_Ga=d,i=3\x1b\\")
+		// Overwrite the poster area with spaces to erase Sixel
+		for i := 0; i < h; i++ {
+			fmt.Fprintf(m.tty, "\x1b[%d;%dH%s", row+1+i, col+1, strings.Repeat(" ", w))
+		}
 		m.tty.WriteString("\x1b[u")
 		m.tty.WriteString("\x1b[?25l")
 		m.tty.Sync()
 		return nil
 	}
+	return tea.Batch(clearImg, tea.ClearScreen)
 }
 
 type posterReadyMsg struct {
@@ -3156,12 +3167,22 @@ func (m *model) posterDisplayCmd() tea.Cmd {
 }
 
 func (m *model) videoEditPosterClearCmd() tea.Cmd {
-	return func() tea.Msg {
+	row, col, w, h := m.videoEditPosterPos()
+	clearImg := func() tea.Msg {
 		m.tty.WriteString("\x1b_Ga=d,i=2\x1b\\")
-		m.tty.WriteString("\x1b[?25l")
+		if w > 0 && h > 0 {
+			m.tty.WriteString("\x1b[?25l")
+			m.tty.WriteString("\x1b[s")
+			for i := 0; i < h; i++ {
+				fmt.Fprintf(m.tty, "\x1b[%d;%dH%s", row+1+i, col+1, strings.Repeat(" ", w))
+			}
+			m.tty.WriteString("\x1b[u")
+			m.tty.WriteString("\x1b[?25l")
+		}
 		m.tty.Sync()
 		return nil
 	}
+	return tea.Batch(clearImg, tea.ClearScreen)
 }
 
 func (m *model) videoEditPosterPos() (row, col, w, h int) {
