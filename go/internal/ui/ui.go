@@ -2997,6 +2997,10 @@ func (m *model) writeImageToTTY(data string, startRow, startCol int) {
 		// Kitty protocol (\x1b_G) or Sixel protocol (\x1bP)
 		fmt.Fprintf(m.tty, "\x1b[%d;%dH", startRow, startCol)
 		m.tty.WriteString(data)
+		if strings.HasPrefix(data, "\x1bP") {
+			// Sixel protocol: Reset character attributes and palette to default terminal colors after rendering
+			m.tty.WriteString("\x1b[0m\x1b]104\x1b\\")
+		}
 	} else {
 		// ANSI block graphics (Halfblocks): split by newline and write line-by-line
 		lines := strings.Split(data, "\n")
@@ -3029,8 +3033,10 @@ func (m *model) coverDisplayCmd() tea.Cmd {
 		}
 
 		m.tty.WriteString("\x1b[?25l")
+		m.tty.WriteString("\x1b[s") // Save cursor
 		m.tty.WriteString("\x1b_Ga=d,i=1\x1b\\")
 		m.writeImageToTTY(kittyOut, m.sidebar.CoverRow()+1, 1)
+		m.tty.WriteString("\x1b[u") // Restore cursor
 		m.tty.WriteString("\x1b[?25l")
 		m.tty.Sync()
 		return nil
