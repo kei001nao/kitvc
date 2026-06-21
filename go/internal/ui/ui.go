@@ -3092,7 +3092,6 @@ func (m *model) coverDisplayCmd() tea.Cmd {
 		m.lastCoverRow = row
 		m.lastCoverCols = cols
 		m.lastCoverRows = rows
-		log.Printf("[DEBUG] coverDisplayCmd: path=%s row=%d col=1 cols=%d rows=%d", path, row, cols, rows)
 		_ = m.displayer.Draw(m.tty, path, row, 1, cols, rows, 1)
 		m.tty.Sync()
 		return nil
