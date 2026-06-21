@@ -1730,6 +1730,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		log.Printf("[DEBUG] tickMsg: complete")
 		cmds = append(cmds, tick())
+	case coverRefreshMsg:
+		log.Printf("[DEBUG] coverRefreshMsg: displaying cover after clear")
+		return m, m.coverDisplayCmd()
 	case playerStateMsg:
 		m.playerStateInProgress = false
 		if m.player == nil {
@@ -1975,10 +1978,8 @@ func (m *model) handleSidebarChange(n *node) tea.Cmd {
 		m.refreshVideoPlaylistFiles(id)
 	}
 	m.syncFocus()
-	if cmd := m.updateCoverForNode(n); cmd != nil {
-		return cmd
-	}
-	return nil
+	m.updateCoverForNode(n)
+	return m.coverClearThenRefreshCmd()
 }
 
 func (m *model) getSidebarWidth() int {
@@ -3097,6 +3098,15 @@ func (m *model) coverDisplayCmd() tea.Cmd {
 	}
 }
 
+func (m *model) coverClearThenRefreshCmd() tea.Cmd {
+	return tea.Batch(
+		m.coverClearCmd(),
+		tea.Tick(50*time.Millisecond, func(t time.Time) tea.Msg {
+			return coverRefreshMsg{}
+		}),
+	)
+}
+
 func (m *model) coverPlaceCmd() tea.Cmd {
 	return m.coverDisplayCmd()
 }
@@ -3300,8 +3310,10 @@ func (m *model) videoEditPosterDisplayCmd() tea.Cmd {
 
 type tickMsg time.Time
 
+type coverRefreshMsg struct{}
+
 func tick() tea.Cmd {
-	return tea.Every(250*time.Millisecond, func(t time.Time) tea.Msg {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
