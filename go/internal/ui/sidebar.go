@@ -351,7 +351,7 @@ func (s *sidebar) CoverRow() int {
 }
 
 func (s *sidebar) CoverCols() int {
-	return s.cover.cols
+	return s.cover.imgCols
 }
 
 func (s *sidebar) CoverRows() int {

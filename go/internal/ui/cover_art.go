@@ -3,16 +3,18 @@ package ui
 import (
 	"image"
 	_ "image/jpeg"
+	"log"
 	"os"
 	"strings"
 )
 
 type coverArt struct {
-	path   string
-	cols   int
-	rows   int
-	art    string
-	cached bool
+	path    string
+	cols    int // sidebar width input (for cache invalidation)
+	imgCols int // actual image display width in character cells
+	rows    int
+	art     string
+	cached  bool
 }
 
 func (c *coverArt) load(path string, cols, maxRows int) bool {
@@ -22,6 +24,7 @@ func (c *coverArt) load(path string, cols, maxRows int) bool {
 	changed := (c.path != path) || (c.cols != cols)
 	c.path = path
 	c.cols = cols
+	c.imgCols = 0
 	c.rows = 0
 	c.art = ""
 	c.cached = false
@@ -48,7 +51,16 @@ func (c *coverArt) load(path string, cols, maxRows int) bool {
 		return false
 	}
 
-	rows := int(float64(srcH) * float64(cols) / float64(srcW) / 2.0)
+	// Calculate natural image width in character cells (fontWidth ≈ 7px)
+	imgCols := srcW / 7
+	if imgCols < 6 {
+		imgCols = 6
+	}
+	if imgCols > cols {
+		imgCols = cols
+	}
+
+	rows := int(float64(srcH) * float64(imgCols) / float64(srcW) / 2.0)
 	if rows < 6 {
 		rows = 6
 	}
@@ -56,12 +68,14 @@ func (c *coverArt) load(path string, cols, maxRows int) bool {
 		rows = maxRows
 	}
 
+	c.imgCols = imgCols
 	c.rows = rows
+	log.Printf("[DEBUG] coverImage: srcW=%d srcH=%d availCols=%d imgCols=%d rows=%d", srcW, srcH, cols, imgCols, rows)
 
-	// Blank lines for sidebar spacing
+	// Blank lines for sidebar spacing (use imgCols width)
 	var sb strings.Builder
 	for i := 0; i < rows; i++ {
-		sb.WriteString(strings.Repeat(" ", cols))
+		sb.WriteString(strings.Repeat(" ", imgCols))
 		if i < rows-1 {
 			sb.WriteString("\n")
 		}
