@@ -3099,12 +3099,26 @@ func (m *model) coverDisplayCmd() tea.Cmd {
 }
 
 func (m *model) coverClearThenRefreshCmd() tea.Cmd {
-	return tea.Batch(
-		m.coverClearCmd(),
-		tea.Tick(50*time.Millisecond, func(t time.Time) tea.Msg {
-			return coverRefreshMsg{}
-		}),
-	)
+	return func() tea.Msg {
+		m.tty.WriteString("\x1b[2J")
+		m.tty.WriteString(strings.Replace(m.View().Content, "\n", "\r\n", -1))
+
+		if !m.hideImages && m.sidebar.HasCover() {
+			path := m.sidebar.CoverPath()
+			if path != "" {
+				cols := m.sidebar.CoverCols()
+				rows := m.sidebar.CoverRows()
+				row := m.sidebar.CoverRow() + 1
+				m.displayer.Draw(m.tty, path, row, 1, cols, rows, 1)
+				m.lastCoverRow = row
+				m.lastCoverCols = cols
+				m.lastCoverRows = rows
+			}
+		}
+
+		m.tty.Sync()
+		return nil
+	}
 }
 
 func (m *model) coverPlaceCmd() tea.Cmd {
