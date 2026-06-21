@@ -48,7 +48,7 @@ func (c *coverArt) load(path string, cols, maxRows int) bool {
 		return false
 	}
 
-	rows := int(float64(srcH) * float64(cols) / float64(srcW) / 2.0)
+	rows := int(float64(srcH) * float64(cols) / float64(srcW) * fontAspectRatio())
 	if rows < 6 {
 		rows = 6
 	}
