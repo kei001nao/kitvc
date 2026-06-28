@@ -27,10 +27,37 @@ func WriteAudioTags(path string, tags map[string]string) error {
 		return fmt.Errorf("ffmpeg failed for %s: %s: %w", path, string(out), err)
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := replaceFile(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("rename failed for %s: %w", path, err)
 	}
 
+	return nil
+}
+
+func replaceFile(src, dst string) error {
+	bak := dst + ".bak"
+	os.Remove(bak)
+
+	hasBak := false
+	if err := os.Rename(dst, bak); err == nil {
+		hasBak = true
+	} else if !os.IsNotExist(err) {
+		// If dst exists but rename to bak failed, try remove directly
+		if removeErr := os.Remove(dst); removeErr != nil {
+			return fmt.Errorf("failed to remove target file %s: %w", dst, err)
+		}
+	}
+
+	if err := os.Rename(src, dst); err != nil {
+		if hasBak {
+			os.Rename(bak, dst)
+		}
+		return err
+	}
+
+	if hasBak {
+		os.Remove(bak)
+	}
 	return nil
 }
