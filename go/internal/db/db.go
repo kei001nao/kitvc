@@ -3,7 +3,9 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -24,11 +26,12 @@ func InitDB(configDir string) error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			artist TEXT,
 			title TEXT,
+			directory TEXT DEFAULT '',
 			release_date TEXT,
 			cover_path TEXT,
 			mbid TEXT,
 			comment TEXT,
-			UNIQUE(artist, title)
+			UNIQUE(artist, title, directory)
 		)`,
 		`CREATE TABLE IF NOT EXISTS music_tracks (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,6 +46,7 @@ func InitDB(configDir string) error {
 			genre TEXT,
 			bpm REAL,
 			duration INTEGER,
+			sample_rate INTEGER DEFAULT 0,
 			last_pos REAL DEFAULT 0,
 			last_played_at REAL,
 			created_at REAL DEFAULT (strftime('%s','now')),
@@ -126,7 +130,69 @@ func InitDB(configDir string) error {
 		}
 	}
 
+	// Migration: add columns for existing databases
+	migrations := []string{
+		"ALTER TABLE music_albums ADD COLUMN directory TEXT DEFAULT ''",
+		"ALTER TABLE music_tracks ADD COLUMN sample_rate INTEGER DEFAULT 0",
+	}
+	for _, m := range migrations {
+		if _, err := db.Exec(m); err != nil {
+			// Ignore "duplicate column" errors
+			if !strings.Contains(err.Error(), "duplicate column") {
+				log.Printf("Migration warning (%s): %v", m, err)
+			}
+		}
+	}
+
+	// Migration: recreate music_albums with proper UNIQUE constraint if needed
+	migrateAlbumUnique(db)
+
 	return nil
+}
+
+func migrateAlbumUnique(db *sql.DB) {
+	row := db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='music_albums'")
+	var sqlStr string
+	if err := row.Scan(&sqlStr); err != nil {
+		return
+	}
+	// If old constraint (no directory in UNIQUE), recreate table
+	if strings.Contains(sqlStr, "UNIQUE(artist, title)") && !strings.Contains(sqlStr, "UNIQUE(artist, title, directory)") {
+		log.Println("Migrating music_albums unique constraint to include directory...")
+		tx, err := db.Begin()
+		if err != nil {
+			log.Printf("Migration failed (begin): %v", err)
+			return
+		}
+		defer tx.Rollback()
+
+		tx.Exec(`CREATE TABLE music_albums_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			artist TEXT,
+			title TEXT,
+			directory TEXT DEFAULT '',
+			release_date TEXT,
+			cover_path TEXT,
+			mbid TEXT,
+			comment TEXT,
+			UNIQUE(artist, title, directory)
+		)`)
+		tx.Exec(`INSERT INTO music_albums_new (id, artist, title, directory, release_date, cover_path, mbid, comment)
+			SELECT id, artist, title, '', release_date, cover_path, mbid, comment FROM music_albums`)
+		// Restore sequence
+		var maxID int64
+		tx.QueryRow("SELECT COALESCE(MAX(id), 0) FROM music_albums_new").Scan(&maxID)
+		if maxID > 0 {
+			tx.Exec(fmt.Sprintf("UPDATE sqlite_sequence SET seq = %d WHERE name = 'music_albums'", maxID))
+		}
+		tx.Exec("DROP TABLE music_albums")
+		tx.Exec("ALTER TABLE music_albums_new RENAME TO music_albums")
+		if err := tx.Commit(); err != nil {
+			log.Printf("Migration failed (commit): %v", err)
+		} else {
+			log.Println("music_albums migration completed successfully")
+		}
+	}
 }
 
 func CloseDB() error {

@@ -126,6 +126,7 @@ type Track struct {
 	DiscNum     int
 	Genre       string
 	Duration    int
+	SampleRate  int
 	MTime       float64
 }
 
@@ -182,6 +183,8 @@ func readAudioTags(path string) (Track, error) {
 	trackNum, _ := m.Track()
 	discNum, _ := m.Disc()
 
+	duration, sampleRate := getAudioInfo(path)
+
 	return Track{
 		Path:        path,
 		Title:       m.Title(),
@@ -191,7 +194,8 @@ func readAudioTags(path string) (Track, error) {
 		TrackNum:    trackNum,
 		DiscNum:     discNum,
 		Genre:       m.Genre(),
-		Duration:    getAudioDuration(path),
+		Duration:    duration,
+		SampleRate:  sampleRate,
 	}, nil
 }
 
@@ -222,26 +226,43 @@ func countFiles(directories []string, exts map[string]bool) int {
 	return count
 }
 
+type ffprobeAudioInfo struct {
+	Format struct {
+		Duration string `json:"duration"`
+	} `json:"format"`
+	Streams []struct {
+		CodecType  string `json:"codec_type"`
+		SampleRate string `json:"sample_rate"`
+	} `json:"streams"`
+}
+
 func parseFfprobeDuration(durationStr string) int {
 	d, _ := strconv.ParseFloat(durationStr, 64)
 	return int(d)
 }
 
-func getAudioDuration(path string) int {
+func getAudioInfo(path string) (duration int, sampleRate int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path)
+	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", path)
 	out, err := cmd.Output()
 	if err != nil {
-		return 0
+		return 0, 0
 	}
-	var data struct {
-		Format struct {
-			Duration string `json:"duration"`
-		} `json:"format"`
-	}
+	var data ffprobeAudioInfo
 	if err := json.Unmarshal(out, &data); err != nil {
-		return 0
+		return 0, 0
 	}
-	return parseFfprobeDuration(data.Format.Duration)
+
+	duration = parseFfprobeDuration(data.Format.Duration)
+
+	for _, s := range data.Streams {
+		if s.CodecType == "audio" && s.SampleRate != "" {
+			sr, _ := strconv.Atoi(s.SampleRate)
+			sampleRate = sr
+			break
+		}
+	}
+
+	return duration, sampleRate
 }

@@ -83,7 +83,7 @@ func newMusicArtistDetail(width, height int, artist string, albums []db.Album) m
 
 	// Load tracks for the first album if any
 	if len(albums) > 0 {
-		mad.loadTracksForAlbum(albums[0].Title)
+		mad.loadTracksForAlbum(albums[0].ID)
 	}
 
 	return mad
@@ -107,21 +107,22 @@ func buildAlbumCols(width int) []table.Column {
 	}
 }
 
-func (mad *musicArtistDetail) loadTracksForAlbum(albumTitle string) {
-	tracks, _ := db.GetMusicTracks(mad.artist, albumTitle)
+func (mad *musicArtistDetail) loadTracksForAlbum(albumID int64) {
+	tracks, _ := db.GetMusicTracksByAlbumID(albumID)
 	mad.tracks = tracks
 	mad.ClearMarks()
 
 	rows := make([]table.Row, len(tracks))
 	for i, t := range tracks {
 		rows[i] = table.NewRow(table.RowData{
-			trackColMark:     "",
-			trackColNum:      strconv.Itoa(i + 1),
-			trackColAlbNum:   strconv.Itoa(t.TrackNum),
-			trackColTitle:    t.Title,
-			trackColArtist:   t.Artist,
-			trackColAlbum:    t.Album,
-			trackColDuration: formatDuration(t.Duration),
+			trackColMark:       "",
+			trackColNum:        strconv.Itoa(i + 1),
+			trackColAlbNum:     strconv.Itoa(t.TrackNum),
+			trackColTitle:      t.Title,
+			trackColArtist:     t.Artist,
+			trackColAlbum:      t.Album,
+			trackColDuration:   formatDuration(t.Duration),
+			trackColSampleRate: formatSampleRate(t.SampleRate),
 		})
 	}
 	mad.tracksTable = mad.tracksTable.WithRows(rows)
@@ -198,7 +199,7 @@ func (mad musicArtistDetail) Update(msg tea.Msg) (musicArtistDetail, tea.Cmd) {
 		newCursor := mad.albumsTable.GetHighlightedRowIndex()
 
 		if oldCursor != newCursor && newCursor >= 0 && newCursor < len(mad.albums) {
-			mad.loadTracksForAlbum(mad.albums[newCursor].Title)
+			mad.loadTracksForAlbum(mad.albums[newCursor].ID)
 		}
 	} else {
 		mad.tracksTable, cmd = mad.tracksTable.Update(msg)
@@ -262,6 +263,7 @@ func buildTrackCols(width int) []table.Column {
 		{trackColArtist, "Artist", 8, 16, 1, true},
 		{trackColAlbum, "Album", 10, 20, 1, true},
 		{trackColDuration, "Duration", 8, 8, 0, false},
+		{trackColSampleRate, "kHz", 4, 5, 0, false},
 	}
 	dividers := len(specs) - 1
 	colWidth := width - dividers
@@ -277,6 +279,7 @@ func buildTrackCols(width int) []table.Column {
 		table.NewColumn(trackColArtist, "Artist", w[trackColArtist]).WithStyle(leftAlign),
 		table.NewColumn(trackColAlbum, "Album", w[trackColAlbum]).WithStyle(leftAlign),
 		table.NewColumn(trackColDuration, "Duration", w[trackColDuration]),
+		table.NewColumn(trackColSampleRate, "kHz", w[trackColSampleRate]),
 	}
 }
 

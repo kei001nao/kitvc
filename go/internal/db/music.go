@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"golang.org/x/text/unicode/norm"
 )
@@ -18,12 +19,14 @@ type TrackData struct {
 	DiscNum     int
 	Genre       string
 	Duration    int
+	SampleRate  int
 }
 
 type Album struct {
 	ID          int64
 	Artist      string
 	Title       string
+	Directory   string
 	ReleaseDate string
 }
 
@@ -46,8 +49,11 @@ func UpdateMusicTrack(t TrackData, force bool) error {
 	t.Album = normalizeString(t.Album)
 	t.Title = normalizeString(t.Title)
 
+	dir := filepath.Dir(t.Path)
+
 	var albumID int64
 	var existingTitle string
+	var existingDir string
 	var err error
 
 	// 1. If not forcing, check if track already exists and has an album_id
@@ -59,19 +65,24 @@ func UpdateMusicTrack(t TrackData, force bool) error {
 		}
 	}
 
-	// 2. Ensure Album exists
-	err = db.QueryRow("SELECT id, title FROM music_albums WHERE artist = ? AND title = ?", t.Artist, t.Album).Scan(&albumID, &existingTitle)
+	// 2. Ensure Album exists - match by artist + album + directory
+	err = db.QueryRow("SELECT id, title, directory FROM music_albums WHERE artist = ? AND title = ? AND directory = ?", t.Artist, t.Album, dir).Scan(&albumID, &existingTitle, &existingDir)
 	if err == sql.ErrNoRows {
-		// Try more flexible matching in Go
-		rows, errQuery := db.Query("SELECT id, title FROM music_albums WHERE artist = ?", t.Artist)
+		// Try flexible matching in Go (same artist + same directory)
+		rows, errQuery := db.Query("SELECT id, title, directory FROM music_albums WHERE artist = ?", t.Artist)
 		if errQuery == nil {
 			targetNorm := t.Album
 			targetBase := getBaseAlbumName(targetNorm)
 
 			for rows.Next() {
 				var id int64
-				var title string
-				if errScan := rows.Scan(&id, &title); errScan != nil {
+				var title, albumDir string
+				if errScan := rows.Scan(&id, &title, &albumDir); errScan != nil {
+					continue
+				}
+
+				// Must match directory
+				if albumDir != dir {
 					continue
 				}
 
@@ -79,6 +90,7 @@ func UpdateMusicTrack(t TrackData, force bool) error {
 				if dbNorm == targetNorm {
 					albumID = id
 					existingTitle = title
+					existingDir = albumDir
 					break
 				}
 
@@ -86,6 +98,7 @@ func UpdateMusicTrack(t TrackData, force bool) error {
 				if dbBase == targetBase || dbBase == targetNorm || dbNorm == targetBase {
 					albumID = id
 					existingTitle = title
+					existingDir = albumDir
 					break
 				}
 			}
@@ -97,8 +110,8 @@ func UpdateMusicTrack(t TrackData, force bool) error {
 			t.Album = existingTitle
 			err = nil
 		} else {
-			// Still not found, create new one
-			res, errExec := db.Exec("INSERT INTO music_albums (artist, title) VALUES (?, ?)", t.Artist, t.Album)
+			// Still not found, create new one with directory
+			res, errExec := db.Exec("INSERT INTO music_albums (artist, title, directory) VALUES (?, ?, ?)", t.Artist, t.Album, dir)
 			if errExec != nil {
 				return fmt.Errorf("failed to insert album: %w", errExec)
 			}
@@ -127,8 +140,8 @@ updateTrack:
 		_, err = db.Exec(`
 			INSERT INTO music_tracks (
 				path, mtime, title, artist, album, album_artist, 
-				track_num, disc_num, genre, duration, album_id
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				track_num, disc_num, genre, duration, sample_rate, album_id
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(path) DO UPDATE SET
 				mtime = excluded.mtime,
 				title = excluded.title,
@@ -139,17 +152,18 @@ updateTrack:
 				disc_num = excluded.disc_num,
 				genre = excluded.genre,
 				duration = excluded.duration,
+				sample_rate = excluded.sample_rate,
 				album_id = excluded.album_id
 		`, t.Path, t.MTime, t.Title, t.Artist, t.Album, t.AlbumArtist,
-			t.TrackNum, t.DiscNum, t.Genre, t.Duration, albumID)
+			t.TrackNum, t.DiscNum, t.Genre, t.Duration, t.SampleRate, albumID)
 	} else {
 		// Insert track; on conflict only overwrite empty/NULL fields, 
 		// and PROTECT album_id/names if they already exist.
 		_, err = db.Exec(`
 			INSERT INTO music_tracks (
 				path, mtime, title, artist, album, album_artist, 
-				track_num, disc_num, genre, duration, album_id
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				track_num, disc_num, genre, duration, sample_rate, album_id
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(path) DO UPDATE SET
 				mtime = excluded.mtime,
 				title = CASE WHEN title IS NULL OR title = '' THEN excluded.title ELSE title END,
@@ -160,9 +174,10 @@ updateTrack:
 				disc_num = CASE WHEN disc_num IS NULL THEN excluded.disc_num ELSE disc_num END,
 				genre = CASE WHEN genre IS NULL OR genre = '' THEN excluded.genre ELSE genre END,
 				duration = CASE WHEN duration IS NULL THEN excluded.duration ELSE duration END,
+				sample_rate = CASE WHEN sample_rate IS NULL THEN excluded.sample_rate ELSE sample_rate END,
 				album_id = CASE WHEN album_id IS NULL OR album_id = 0 THEN excluded.album_id ELSE album_id END
 		`, t.Path, t.MTime, t.Title, t.Artist, t.Album, t.AlbumArtist,
-			t.TrackNum, t.DiscNum, t.Genre, t.Duration, albumID)
+			t.TrackNum, t.DiscNum, t.Genre, t.Duration, t.SampleRate, albumID)
 	}
 
 	if err != nil {
@@ -353,9 +368,9 @@ func UpdateAlbumMetadata(albumID int64, newArtist string, newAlbum string, newDa
 func GetMusicTrackByPath(path string) (TrackData, error) {
 	var t TrackData
 	err := db.QueryRow(
-		"SELECT path, mtime, title, artist, album, album_artist, track_num, disc_num, genre, duration FROM music_tracks WHERE path = ?",
+		"SELECT path, mtime, title, artist, album, album_artist, track_num, disc_num, genre, duration, sample_rate FROM music_tracks WHERE path = ?",
 		path,
-	).Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration)
+	).Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration, &t.SampleRate)
 	if err != nil {
 		return TrackData{}, err
 	}
@@ -372,7 +387,7 @@ func GetAlbumIDByTrackPath(path string) (int64, error) {
 }
 
 func GetMusicTracks(artist, albumTitle string) ([]TrackData, error) {
-	query := "SELECT path, mtime, title, artist, album, album_artist, track_num, disc_num, genre, duration FROM music_tracks"
+	query := "SELECT path, mtime, title, artist, album, album_artist, track_num, disc_num, genre, duration, sample_rate FROM music_tracks"
 	var args []interface{}
 
 	if artist != "" && albumTitle != "" {
@@ -393,7 +408,7 @@ func GetMusicTracks(artist, albumTitle string) ([]TrackData, error) {
 	var tracks []TrackData
 	for rows.Next() {
 		var t TrackData
-		err := rows.Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration)
+		err := rows.Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration, &t.SampleRate)
 		if err != nil {
 			return nil, err
 		}
@@ -403,7 +418,7 @@ func GetMusicTracks(artist, albumTitle string) ([]TrackData, error) {
 }
 
 func GetMusicArtistsAndAlbums() ([]string, map[string][]Album, error) {
-	rows, err := db.Query("SELECT id, artist, title, COALESCE(release_date, '') FROM music_albums ORDER BY artist, release_date DESC, title")
+	rows, err := db.Query("SELECT id, artist, title, COALESCE(directory, ''), COALESCE(release_date, '') FROM music_albums ORDER BY artist, release_date DESC, title")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -415,7 +430,7 @@ func GetMusicArtistsAndAlbums() ([]string, map[string][]Album, error) {
 
 	for rows.Next() {
 		var a Album
-		if err := rows.Scan(&a.ID, &a.Artist, &a.Title, &a.ReleaseDate); err != nil {
+		if err := rows.Scan(&a.ID, &a.Artist, &a.Title, &a.Directory, &a.ReleaseDate); err != nil {
 			return nil, nil, err
 		}
 		if !artistMap[a.Artist] {
@@ -461,7 +476,7 @@ func UpdateAlbumCover(albumID int64, coverPath string) error {
 }
 
 func GetAllAlbums() ([]Album, error) {
-	rows, err := db.Query("SELECT id, artist, title, COALESCE(release_date, '') FROM music_albums ORDER BY artist, title")
+	rows, err := db.Query("SELECT id, artist, title, COALESCE(directory, ''), COALESCE(release_date, '') FROM music_albums ORDER BY artist, title")
 	if err != nil {
 		return nil, err
 	}
@@ -470,7 +485,7 @@ func GetAllAlbums() ([]Album, error) {
 	var albums []Album
 	for rows.Next() {
 		var a Album
-		if err := rows.Scan(&a.ID, &a.Artist, &a.Title, &a.ReleaseDate); err != nil {
+		if err := rows.Scan(&a.ID, &a.Artist, &a.Title, &a.Directory, &a.ReleaseDate); err != nil {
 			return nil, err
 		}
 		albums = append(albums, a)
@@ -480,7 +495,7 @@ func GetAllAlbums() ([]Album, error) {
 
 func GetMusicTracksByAlbumID(albumID int64) ([]TrackData, error) {
 	rows, err := db.Query(
-		"SELECT path, mtime, title, artist, album, album_artist, track_num, disc_num, genre, duration FROM music_tracks WHERE album_id = ?",
+		"SELECT path, mtime, title, artist, album, album_artist, track_num, disc_num, genre, duration, sample_rate FROM music_tracks WHERE album_id = ?",
 		albumID,
 	)
 	if err != nil {
@@ -491,7 +506,7 @@ func GetMusicTracksByAlbumID(albumID int64) ([]TrackData, error) {
 	var tracks []TrackData
 	for rows.Next() {
 		var t TrackData
-		if err := rows.Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration); err != nil {
+		if err := rows.Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration, &t.SampleRate); err != nil {
 			return nil, err
 		}
 		tracks = append(tracks, t)
@@ -508,7 +523,7 @@ type MusicFilter struct {
 
 func GetRecentMusicTracks(limit int) ([]TrackData, error) {
 	rows, err := db.Query(
-		"SELECT path, mtime, title, artist, album, album_artist, track_num, disc_num, genre, duration FROM music_tracks ORDER BY created_at DESC LIMIT ?",
+		"SELECT path, mtime, title, artist, album, album_artist, track_num, disc_num, genre, duration, sample_rate FROM music_tracks ORDER BY created_at DESC LIMIT ?",
 		limit,
 	)
 	if err != nil {
@@ -519,7 +534,7 @@ func GetRecentMusicTracks(limit int) ([]TrackData, error) {
 	var tracks []TrackData
 	for rows.Next() {
 		var t TrackData
-		if err := rows.Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration); err != nil {
+		if err := rows.Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration, &t.SampleRate); err != nil {
 			return nil, err
 		}
 		tracks = append(tracks, t)
@@ -579,7 +594,7 @@ func GetMusicPlaylistTracks(playlistID int64) ([]TrackData, error) {
 	rows, err := db.Query(`
 		SELECT 
 			t.path, t.mtime, t.title, t.artist, t.album, t.album_artist, 
-			t.track_num, t.disc_num, t.genre, t.duration
+			t.track_num, t.disc_num, t.genre, t.duration, t.sample_rate
 		FROM music_tracks t
 		JOIN music_playlist_tracks pt ON t.path = pt.track_path
 		WHERE pt.playlist_id = ?
@@ -593,7 +608,7 @@ func GetMusicPlaylistTracks(playlistID int64) ([]TrackData, error) {
 	var tracks []TrackData
 	for rows.Next() {
 		var t TrackData
-		err := rows.Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration)
+		err := rows.Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration, &t.SampleRate)
 		if err != nil {
 			return nil, err
 		}

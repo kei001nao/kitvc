@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -428,6 +429,10 @@ func (s sidebar) Update(msg tea.Msg) (sidebar, tea.Cmd) {
 				}
 			}
 		}
+		if n := s.SelectedNode(); n != nil {
+			log.Printf("[SB_NAV] key=%q cursor=%d scrollOffset=%d visibleRows=%d height=%d selected=%q",
+				msg.String(), s.cursor, s.scrollOffset, len(s.visibleRows), s.height, n.label)
+		}
 	}
 	return s, nil
 }
@@ -460,6 +465,7 @@ func (s sidebar) View(focused bool) string {
 	}
 
 	var tree strings.Builder
+	// log.Printf("[DBG_SB] tree loop: start=%d, end=%d, treeAvail=%d", start, end, treeAvail)
 	for i := start; i < end; i++ {
 		n := s.visibleRows[i]
 
@@ -485,7 +491,9 @@ func (s sidebar) View(focused bool) string {
 			line = line[:availWidth]
 		}
 
-		tree.WriteString(style.Render(line))
+		rendered := style.Render(line)
+		// log.Printf("[DBG_SB] tree[%d]: %q (cursor=%t, label=%s)", i, rendered, i == s.cursor, n.label)
+		tree.WriteString(rendered)
 		if i < end-1 {
 			tree.WriteString("\n")
 		}
@@ -498,6 +506,7 @@ func (s sidebar) View(focused bool) string {
 	if padding < 0 {
 		padding = 0
 	}
+	// log.Printf("[DBG_SB] padding=%d, treeAvail=%d, shownLines=%d", padding, treeAvail, shownLines)
 
 	var content strings.Builder
 	content.WriteString(treeStr)
@@ -510,9 +519,14 @@ func (s sidebar) View(focused bool) string {
 
 	contentStr := content.String()
 	lines := strings.Split(contentStr, "\n")
+	// log.Printf("[DBG_SB] contentStr before trunc: %d lines", len(lines))
+	// for idx, l := range lines {
+	// 	log.Printf("[DBG_SB] line %d/%d: %q", idx+1, len(lines), l)
+	// }
 	if len(lines) > s.height {
 		lines = lines[:s.height]
 		contentStr = strings.Join(lines, "\n")
+		// log.Printf("[DBG_SB] truncated to %d lines", s.height)
 	}
 
 	sidebarStyle := lipgloss.NewStyle().
@@ -520,5 +534,14 @@ func (s sidebar) View(focused bool) string {
 		Height(s.height).
 		UnsetBackground()
 
-	return sidebarStyle.Render(contentStr)
+	result := sidebarStyle.Render(contentStr)
+	log.Printf("[SB_VIEW] treeAvail=%d coverLines=%d shownLines=%d padding=%d s.height=%d",
+		treeAvail, coverLines, shownLines, padding, s.height)
+	log.Printf("[SB_VIEW] preTruncLines=%d truncated=%v",
+		len(lines), len(lines) > s.height)
+	for i := max(0, len(lines)-5); i < len(lines); i++ {
+		log.Printf("[SB_VIEW] line[%d/%d]=%q", i, len(lines), lines[i])
+	}
+	log.Printf("[SB_VIEW] endsWithNewline=%v", strings.HasSuffix(contentStr, "\n"))
+	return result
 }

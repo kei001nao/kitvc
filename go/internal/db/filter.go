@@ -32,7 +32,7 @@ func GetFilteredMusicTracks(conditionsJSON, sortJSON string) ([]TrackData, error
 
 	whereClause, params := buildWhereClause(conditions)
 
-	query := "SELECT path, mtime, title, artist, album, album_artist, track_num, disc_num, genre, duration FROM music_tracks"
+	query := "SELECT path, mtime, title, artist, album, album_artist, track_num, disc_num, genre, duration, sample_rate FROM music_tracks"
 	if whereClause != "" {
 		query += " WHERE " + whereClause
 	}
@@ -71,7 +71,7 @@ func GetFilteredMusicTracks(conditionsJSON, sortJSON string) ([]TrackData, error
 	var tracks []TrackData
 	for rows.Next() {
 		var t TrackData
-		if err := rows.Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration); err != nil {
+		if err := rows.Scan(&t.Path, &t.MTime, &t.Title, &t.Artist, &t.Album, &t.AlbumArtist, &t.TrackNum, &t.DiscNum, &t.Genre, &t.Duration, &t.SampleRate); err != nil {
 			return nil, err
 		}
 		tracks = append(tracks, t)

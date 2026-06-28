@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strconv"
 	"kitvc/internal/db"
 
@@ -75,14 +76,22 @@ func calcColWidths(specs []colSpec, totalWidth int) map[string]int {
 }
 
 const (
-	trackColMark     = "mark"
-	trackColNum      = "num"
-	trackColAlbNum   = "albnum"
-	trackColTitle    = "title"
-	trackColArtist   = "artist"
-	trackColAlbum    = "album"
-	trackColDuration = "duration"
+	trackColMark       = "mark"
+	trackColNum        = "num"
+	trackColAlbNum     = "albnum"
+	trackColTitle      = "title"
+	trackColArtist     = "artist"
+	trackColAlbum      = "album"
+	trackColDuration   = "duration"
+	trackColSampleRate = "srate"
 )
+
+func formatSampleRate(sr int) string {
+	if sr <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%dk", sr/1000)
+}
 
 type trackList struct {
 	table  table.Model
@@ -108,13 +117,14 @@ func (tl trackList) buildTable(width, height int, tracks []db.TrackData) table.M
 	rows := make([]table.Row, len(tracks))
 	for i, t := range tracks {
 		rows[i] = table.NewRow(table.RowData{
-			trackColMark:     "",
-			trackColNum:      strconv.Itoa(i + 1),
-			trackColAlbNum:   strconv.Itoa(t.TrackNum),
-			trackColTitle:    t.Title,
-			trackColArtist:   t.Artist,
-			trackColAlbum:    t.Album,
-			trackColDuration: formatDuration(t.Duration),
+			trackColMark:       "",
+			trackColNum:        strconv.Itoa(i + 1),
+			trackColAlbNum:     strconv.Itoa(t.TrackNum),
+			trackColTitle:      t.Title,
+			trackColArtist:     t.Artist,
+			trackColAlbum:      t.Album,
+			trackColDuration:   formatDuration(t.Duration),
+			trackColSampleRate: formatSampleRate(t.SampleRate),
 		})
 	}
 
@@ -152,6 +162,7 @@ func (tl trackList) buildColumns(width int) []table.Column {
 		{trackColArtist, "Artist", 6, 16, 1, true},
 		{trackColAlbum, "Album", 8, 20, 1, true},
 		{trackColDuration, "Duration", 8, 8, 0, false},
+		{trackColSampleRate, "kHz", 4, 5, 0, false},
 	}
 	dividers := len(specs) - 1
 	colWidth := width - dividers
@@ -167,6 +178,7 @@ func (tl trackList) buildColumns(width int) []table.Column {
 		table.NewColumn(trackColArtist, "Artist", w[trackColArtist]).WithStyle(leftAlign),
 		table.NewColumn(trackColAlbum, "Album", w[trackColAlbum]).WithStyle(leftAlign),
 		table.NewColumn(trackColDuration, "Duration", w[trackColDuration]),
+		table.NewColumn(trackColSampleRate, "kHz", w[trackColSampleRate]),
 	}
 }
 
