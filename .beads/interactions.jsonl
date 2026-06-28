@@ -153,3 +153,4 @@
 {"id":"int-2715dc9f","kind":"field_change","created_at":"2026-06-21T10:39:45.364972118Z","actor":"Gemini CLI","issue_id":"kitvc-4o5","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"整理のためクローズ。必要に応じて再オープン。"}}
 {"id":"int-f828e1ad","kind":"field_change","created_at":"2026-06-28T02:55:49.960636156Z","actor":"Gemini CLI","issue_id":"kitvc-jzhf","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-6764f0d5","kind":"field_change","created_at":"2026-06-28T03:10:27.015914433Z","actor":"Gemini CLI","issue_id":"kitvc-ildo","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-21a39643","kind":"field_change","created_at":"2026-06-28T03:14:13.537016691Z","actor":"Gemini CLI","issue_id":"kitvc-xmxb","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
