@@ -107,6 +107,7 @@ type model struct {
 	focusedSide            bool
 	currentPlaylistID      int64
 	currentTrack           string
+	currentTrackPath       string
 	progress               progress.Model
 	playbackPos            float64
 	duration               float64
@@ -1012,6 +1013,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.player.PlayQueue(paths, startIndex)
 							t := tracks[startIndex]
 							m.currentTrack = fmt.Sprintf("%s - %s", t.Artist, t.Title)
+							m.currentTrackPath = t.Path
 							m.duration = float64(t.Duration)
 						}
 					}
@@ -1045,6 +1047,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							if startIndex >= 0 {
 								m.player.PlayQueue(paths, startIndex)
 								m.currentTrack = fmt.Sprintf("%s - %s", track.Artist, track.Title)
+								m.currentTrackPath = track.Path
 								m.duration = float64(track.Duration)
 							}
 						}
@@ -1065,6 +1068,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.player.PlayQueue(paths, startIndex)
 						v := videos[startIndex]
 						m.currentTrack = v.Filename
+						m.currentTrackPath = v.Path
 						m.duration = float64(v.Duration)
 					}
 					return m, nil
@@ -1700,6 +1704,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.playbackPos = 0
 				m.duration = 0
 				m.currentTrack = ""
+				m.currentTrackPath = ""
 			} else if !m.playerStateInProgress {
 				m.playerStateInProgress = true
 				cmds = append(cmds, fetchPlayerStateCmd(m.player))
@@ -1727,6 +1732,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.trackList.UpdatePlaybackStatus(msg.currentPath, msg.isPaused)
 		m.artistDetail.UpdatePlaybackStatus(msg.currentPath, msg.isPaused)
 		m.videoList.UpdatePlaybackStatus(msg.currentPath, msg.isPaused)
+
+		if msg.currentPath != m.currentTrackPath {
+			m.currentTrackPath = msg.currentPath
+			if msg.currentPath == "" {
+				m.currentTrack = ""
+			} else {
+				track, err := db.GetMusicTrackByPath(msg.currentPath)
+				if err == nil {
+					m.currentTrack = fmt.Sprintf("%s - %s", track.Artist, track.Title)
+				} else {
+					video, err := db.GetVideoByPath(msg.currentPath)
+					if err == nil {
+						m.currentTrack = video.Filename
+					} else {
+						m.currentTrack = filepath.Base(msg.currentPath)
+					}
+				}
+			}
+		}
+
 		if msg.currentPath != "" && msg.timePos > 0 {
 			db.UpdateVideoLastPos(msg.currentPath, msg.timePos)
 		}

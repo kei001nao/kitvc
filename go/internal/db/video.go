@@ -608,3 +608,29 @@ func GetUnhealthyVideos() ([]VideoData, error) {
 	}
 	return videos, nil
 }
+
+func GetVideoByPath(path string) (VideoData, error) {
+	var v VideoData
+	err := db.QueryRow(`
+		SELECT 
+			path, filename, size, duration, year, mtime,
+			COALESCE(type, ''), COALESCE(category, ''), COALESCE(subcategory, ''),
+			COALESCE(series, ''), COALESCE(NULLIF(season, ''), 0), COALESCE(NULLIF(episode, ''), 0), 
+			COALESCE(title, ''), COALESCE(air_date, ''),
+			COALESCE(genres, ''), COALESCE(synopsis, ''),
+			COALESCE(series_overview, ''), COALESCE(episode_overview, ''),
+			COALESCE(thumbnail_path, ''), COALESCE(poster_path, ''), COALESCE(local_poster_path, '')
+		FROM video_files
+		WHERE path = ?
+	`, path).Scan(
+		&v.Path, &v.Filename, &v.Size, &v.Duration, &v.Year, &v.MTime,
+		&v.Type, &v.Category, &v.Subcategory, &v.Series, &v.Season, &v.Episode,
+		&v.Title, &v.AirDate,
+		&v.Genres, &v.Synopsis, &v.SeriesOverview, &v.EpisodeOverview,
+		&v.ThumbnailPath, &v.PosterPath, &v.LocalPosterPath,
+	)
+	if err != nil {
+		return VideoData{}, err
+	}
+	return v, nil
+}
