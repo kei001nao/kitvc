@@ -301,10 +301,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scanCancelled = false
 			m.message = ""
 			if m.scanPhase == "music" {
-				if err := library.ProcessAllAlbumCovers(); err != nil {
-					m.setMessage(err.Error())
-				}
-				db.DeleteEmptyAlbums()
+				m.message = "Processing album covers..."
+				return m, processAlbumCoversCmd()
 			}
 			m.sidebar.Refresh()
 			m.refreshActiveView()
@@ -349,6 +347,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebar.Refresh()
 		m.refreshActiveView()
 		// Update cover for current selection
+		if n := m.sidebar.SelectedNode(); n != nil {
+			if cmd := m.updateCoverForNode(n); cmd != nil {
+				return m, cmd
+			}
+		}
+		return m, nil
+	case coversProcessedMsg:
+		m.message = ""
+		if msg.err != nil {
+			m.setMessage(msg.err.Error())
+		}
+		m.sidebar.Refresh()
+		m.refreshActiveView()
 		if n := m.sidebar.SelectedNode(); n != nil {
 			if cmd := m.updateCoverForNode(n); cmd != nil {
 				return m, cmd
@@ -3412,6 +3423,18 @@ type tmdbBatchProgressMsg struct {
 type musicBatchProgressMsg struct {
 	current int
 	total   int
+}
+
+type coversProcessedMsg struct {
+	err error
+}
+
+func processAlbumCoversCmd() tea.Cmd {
+	return func() tea.Msg {
+		err := library.ProcessAllAlbumCovers()
+		db.DeleteEmptyAlbums()
+		return coversProcessedMsg{err: err}
+	}
 }
 
 func (m model) scanMusicCmd() tea.Cmd {
