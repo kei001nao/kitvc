@@ -334,11 +334,12 @@ func DownloadPoster(imageURL, targetDir, name string) (string, error) {
 	hash := md5.Sum([]byte(fullURL))
 	hashStr := hex.EncodeToString(hash[:])
 	targetPath := filepath.Join(targetDir, fmt.Sprintf("%s_%s.jpg", name, hashStr[:8]))
-	if _, err := os.Stat(targetPath); err == nil {
+	if info, err := os.Stat(targetPath); err == nil && info.Size() > 0 {
 		return targetPath, nil
 	}
 	
-	resp, err := http.Get(fullURL)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(fullURL)
 	if err != nil {
 		return "", err
 	}
@@ -348,14 +349,25 @@ func DownloadPoster(imageURL, targetDir, name string) (string, error) {
 		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	f, err := os.Create(targetPath)
+	tmpPath := targetPath + ".tmp"
+	f, err := os.Create(tmpPath)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
 
 	_, err = io.Copy(f, resp.Body)
-	return targetPath, err
+	f.Close()
+	if err != nil {
+		os.Remove(tmpPath)
+		return "", err
+	}
+
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		os.Remove(tmpPath)
+		return "", err
+	}
+
+	return targetPath, nil
 }
 
 func (c *Client) DownloadSearchPoster(item SearchItem, targetDir string) (string, error) {
