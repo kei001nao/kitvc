@@ -50,7 +50,7 @@ func (d *termimgDisplayer) Clear(w io.Writer, startRow, startCol, cols, rows int
 		fmt.Fprintf(w, "\x1b[%d;%dH%s", startRow+i, startCol, strings.Repeat(" ", cols))
 	}
 
-	fmt.Fprint(w, "\x1b8\x1b[?25l")
+	fmt.Fprint(w, "\x1b8\x1b[?25h")
 	return nil
 }
 
@@ -87,7 +87,7 @@ func (d *termimgDisplayer) DrawCached(w io.Writer, data string, startRow, startC
 	}
 
 	// Restore cursor using DECRC
-	fmt.Fprint(w, "\x1b8\x1b[?25l")
+	fmt.Fprint(w, "\x1b8\x1b[?25h")
 	return nil
 }
 

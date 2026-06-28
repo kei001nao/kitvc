@@ -16,7 +16,7 @@ func InitDB(configDir string) error {
 	dbPath := filepath.Join(configDir, "library.db")
 	
 	var err error
-	db, err = sql.Open("sqlite", dbPath)
+	db, err = sql.Open("sqlite", dbPath+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}

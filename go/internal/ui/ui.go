@@ -163,6 +163,7 @@ type model struct {
 	tmdbBatchIndex     int
 	tmdbBatchTotal     int
 	tmdbBatchCancelled bool
+	tmdbBatchClient    *tmdb.Client
 
 	playerStateInProgress bool
 
@@ -376,6 +377,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cancelled := m.tmdbBatchCancelled
 			m.tmdbBatchMode = false
 			m.tmdbBatchCancelled = false
+			m.tmdbBatchClient = nil
 			if cancelled {
 				m.setMessage("TMDB fetch cancelled")
 			} else {
@@ -1530,6 +1532,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.focusedSide && videoViews[m.activeView] {
 				marked := m.videoList.MarkedVideos()
 				if len(marked) > 0 {
+					apiKey := m.config.Video.TMDBAPIKey
+					if apiKey == "" {
+						apiKey = os.Getenv("TMDB_API_KEY")
+					}
+					if apiKey == "" {
+						m.setMessage("TMDB API key not set")
+						return m, nil
+					}
+					m.tmdbBatchClient = tmdb.NewClient(apiKey)
 					m.tmdbBatchMode = true
 					m.tmdbBatchCancelled = false
 					m.tmdbBatchVideos = marked
@@ -1538,6 +1549,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.setMessage("Fetching TMDB metadata...")
 					return m, m.processNextTMDbItem()
 				}
+			} else if !m.focusedSide && musicViews[m.activeView] {
 			} else if !m.focusedSide && musicViews[m.activeView] {
 				marked := m.getMarkedMusicPaths()
 				if len(marked) > 0 {
@@ -3530,14 +3542,7 @@ func (m model) processNextScanItem() tea.Cmd {
 func (m model) processNextTMDbItem() tea.Cmd {
 	return func() tea.Msg {
 		v := m.tmdbBatchVideos[m.tmdbBatchIndex]
-		apiKey := m.config.Video.TMDBAPIKey
-		if apiKey == "" {
-			apiKey = os.Getenv("TMDB_API_KEY")
-		}
-		if apiKey == "" {
-			return tmdbBatchProgressMsg{current: m.tmdbBatchIndex + 1, total: m.tmdbBatchTotal}
-		}
-		client := tmdb.NewClient(apiKey)
+		client := m.tmdbBatchClient
 
 		var meta *tmdb.VideoMetadata
 		if v.Type == "TV Show" && v.Series != "" {
