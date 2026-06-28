@@ -58,9 +58,20 @@ func UpdateMusicTrack(t TrackData, force bool) error {
 
 	// 1. If not forcing, check if track already exists and has an album_id
 	if !force {
-		err = db.QueryRow("SELECT album_id, artist, album, title FROM music_tracks WHERE path = ?", t.Path).Scan(&albumID, &t.Artist, &t.Album, &t.Title)
-		if err == nil && albumID != 0 {
-			// Track exists, use existing names and albumID
+		var exAlbumID int64
+		var exArtist, exAlbum, exTitle string
+		err = db.QueryRow("SELECT album_id, artist, album, title FROM music_tracks WHERE path = ?", t.Path).Scan(&exAlbumID, &exArtist, &exAlbum, &exTitle)
+		if err == nil && exAlbumID != 0 {
+			albumID = exAlbumID
+			if t.Artist == "" {
+				t.Artist = exArtist
+			}
+			if t.Album == "" {
+				t.Album = exAlbum
+			}
+			if t.Title == "" {
+				t.Title = exTitle
+			}
 			goto updateTrack
 		}
 	}
