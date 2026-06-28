@@ -188,8 +188,21 @@ func (p *MpvPlayer) PlayQueue(paths []string, startIdx int) error {
 		return nil
 	}
 	path := paths[startIdx]
+	var nextPath string
+	if startIdx+1 < len(paths) {
+		nextPath = paths[startIdx+1]
+	}
 	p.mu.Unlock()
-	return p.LoadFile(path)
+
+	if err := p.LoadFile(path); err != nil {
+		return err
+	}
+	if nextPath != "" {
+		p.sendCommandAsync(map[string]interface{}{
+			"command": []interface{}{"loadfile", nextPath, "append"},
+		})
+	}
+	return nil
 }
 
 func (p *MpvPlayer) GetCurrentTrackPath() string {

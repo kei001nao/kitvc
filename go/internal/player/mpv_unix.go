@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 func mpvDial(path string) (net.Conn, error) {
@@ -38,7 +39,9 @@ func mpvKill(cmd *exec.Cmd) {
 }
 
 func (p *MpvPlayer) startIPC() {
+	p.cmdCh = make(chan cmdRequest, 64)
 	go p.readLoop()
+	go p.writeLoop()
 }
 
 func (p *MpvPlayer) readLoop() {
@@ -54,23 +57,50 @@ func (p *MpvPlayer) readLoop() {
 	}
 }
 
-func (p *MpvPlayer) writeToPipe(data []byte) error {
-	p.mu.Lock()
-	if p.conn == nil {
-		p.mu.Unlock()
-		return fmt.Errorf("mpv not connected")
-	}
-	conn := p.conn
-	p.mu.Unlock()
-
-	_, err := conn.Write(data)
-	log.Printf("[DEBUG] sendCommand: write done err=%v", err)
-	if err != nil {
+func (p *MpvPlayer) writeLoop() {
+	log.Printf("[DEBUG] MpvPlayer.writeLoop: started")
+	for req := range p.cmdCh {
 		p.mu.Lock()
-		p.conn.Close()
-		p.conn = nil
+		conn := p.conn
 		p.mu.Unlock()
-		return fmt.Errorf("failed to send command to mpv: %w", err)
+		if conn == nil {
+			if req.result != nil {
+				req.result <- fmt.Errorf("mpv not connected")
+			}
+			continue
+		}
+		_, err := conn.Write(req.data)
+		if req.result != nil {
+			req.result <- err
+		}
+		if err != nil {
+			log.Printf("[DEBUG] writeLoop: write error: %v", err)
+			p.mu.Lock()
+			if p.conn != nil {
+				p.conn.Close()
+				p.conn = nil
+			}
+			p.mu.Unlock()
+			return
+		}
 	}
-	return nil
 }
+
+func (p *MpvPlayer) writeToPipe(data []byte) error {
+	ch := make(chan error, 1)
+	select {
+	case p.cmdCh <- cmdRequest{data: data, result: ch}:
+	case <-time.After(3 * time.Second):
+		return fmt.Errorf("timeout sending command to mpv")
+	}
+	select {
+	case err := <-ch:
+		if err != nil {
+			return fmt.Errorf("failed to send command to mpv: %w", err)
+		}
+		return nil
+	case <-time.After(3 * time.Second):
+		return fmt.Errorf("timeout waiting for mpv command result")
+	}
+}
+

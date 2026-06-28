@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,23 +18,34 @@ const (
 	rateLimit  = 1 * time.Second
 )
 
+var (
+	lastCall   time.Time
+	lastCallMu sync.Mutex
+	sharedClient = &Client{
+		http: &http.Client{Timeout: 15 * time.Second},
+	}
+)
+
 type Client struct {
 	http     *http.Client
-	lastCall time.Time
+}
+
+func SharedClient() *Client {
+	return sharedClient
 }
 
 func NewClient() *Client {
-	return &Client{
-		http: &http.Client{Timeout: 15 * time.Second},
-	}
+	return SharedClient()
 }
 
 func (c *Client) rateLimitWait() {
-	elapsed := time.Since(c.lastCall)
+	lastCallMu.Lock()
+	defer lastCallMu.Unlock()
+	elapsed := time.Since(lastCall)
 	if elapsed < rateLimit {
 		time.Sleep(rateLimit - elapsed)
 	}
-	c.lastCall = time.Now()
+	lastCall = time.Now()
 }
 
 func (c *Client) get(urlStr string, dest interface{}) error {
