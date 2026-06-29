@@ -3,7 +3,6 @@ package library
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +27,33 @@ type Video struct {
 func ScanVideo(directories []string) ([]Video, error) {
 	var videos []Video
 
+	paths, err := ScanVideoFiles(directories)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range paths {
+		vInfo, err := ReadVideoMetadata(path)
+		if err != nil {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		videos = append(videos, Video{
+			Path:     path,
+			Filename: info.Name(),
+			Size:     info.Size(),
+			Duration: vInfo.Duration,
+			Year:     vInfo.Year,
+			MTime:    float64(info.ModTime().Unix()),
+		})
+	}
+	return videos, nil
+}
+
+func ScanVideoFiles(directories []string) ([]string, error) {
+	var paths []string
 	for _, dir := range directories {
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -36,34 +62,18 @@ func ScanVideo(directories []string) ([]Video, error) {
 			if info.IsDir() {
 				return nil
 			}
-
 			ext := strings.ToLower(filepath.Ext(path))
 			if !VideoExtensions[ext] {
 				return nil
 			}
-
-			vInfo, err := readVideoMetadata(path)
-			if err != nil {
-				fmt.Printf("Error reading video metadata for %s: %v\n", path, err)
-				return nil
-			}
-
-			videos = append(videos, Video{
-				Path:     path,
-				Filename: info.Name(),
-				Size:     info.Size(),
-				Duration: vInfo.Duration,
-				Year:     vInfo.Year,
-				MTime:    float64(info.ModTime().Unix()),
-			})
+			paths = append(paths, path)
 			return nil
 		})
 		if err != nil {
 			return nil, err
 		}
 	}
-
-	return videos, nil
+	return paths, nil
 }
 
 type ffprobeOutput struct {
@@ -76,7 +86,7 @@ type ffprobeOutput struct {
 	} `json:"format"`
 }
 
-func readVideoMetadata(path string) (Video, error) {
+func ReadVideoMetadata(path string) (Video, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path)
@@ -133,6 +143,27 @@ type Track struct {
 func ScanMusic(directories []string) ([]Track, error) {
 	var tracks []Track
 
+	paths, err := ScanMusicFiles(directories)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range paths {
+		track, err := ReadAudioTags(path)
+		if err != nil {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		track.MTime = float64(info.ModTime().Unix())
+		tracks = append(tracks, track)
+	}
+	return tracks, nil
+}
+
+func ScanMusicFiles(directories []string) ([]string, error) {
+	var paths []string
 	for _, dir := range directories {
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -141,31 +172,21 @@ func ScanMusic(directories []string) ([]Track, error) {
 			if info.IsDir() {
 				return nil
 			}
-
 			ext := strings.ToLower(filepath.Ext(path))
 			if !AudioExtensions[ext] {
 				return nil
 			}
-
-			track, err := readAudioTags(path)
-			if err != nil {
-				// Log error and continue
-				fmt.Printf("Error reading tags for %s: %v\n", path, err)
-				return nil
-			}
-			track.MTime = float64(info.ModTime().Unix())
-			tracks = append(tracks, track)
+			paths = append(paths, path)
 			return nil
 		})
 		if err != nil {
 			return nil, err
 		}
 	}
-
-	return tracks, nil
+	return paths, nil
 }
 
-func readAudioTags(path string) (Track, error) {
+func ReadAudioTags(path string) (Track, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return Track{}, err
